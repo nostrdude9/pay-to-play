@@ -1,0 +1,17 @@
+{
+  "name": "relay",
+  "version": "1.0.0",
+  "description": "Local Nostr relay for testing",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "node-fetch": "^3.3.2",
+    "nostr-tools": "^1.17.0",
+    "ws": "^8.16.0"
+  }
+}
