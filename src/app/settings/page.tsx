@@ -25,6 +25,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNWC } from "@/components/providers/nwc-provider";
+import { LightningAddress } from "@getalby/lightning-tools";
 
 const formSchema = z.object({
   nwcString: z.string().min(1, {
@@ -79,43 +80,56 @@ function TestNWCButton() {
     try {
       setIsLoading(true);
       
-      // Get LNURL data from our relay
-      const response = await fetch(
-        `http://localhost:3001/api/lnurl/karnage1@getalby.com`,
-        { cache: "no-store" }
-      );
-      if (!response.ok) {
-        throw new Error(`Failed to get LNURL data: ${response.statusText}`);
-      }
-      const { callback } = await response.json();
+      // Use LightningAddress to handle LNURL
+      const amount = 21 * 1000; // 21 sats in millisats
+      const lightningAddress = 'karnage1@getalby.com';
+      console.info(`Attempting to send ${amount / 1000} sats to ${lightningAddress}`);
       
-      // Generate invoice through our relay
-      const amount = 4 * 1000; // 4 sats in millisats
-      const invoiceResponse = await fetch(
-        'http://localhost:3001/api/invoice/create',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            callback,
-            amount,
-          }),
-        }
-      );
-      if (!invoiceResponse.ok) {
-        throw new Error(`Failed to generate invoice: ${invoiceResponse.statusText}`);
+      const ln = new LightningAddress(lightningAddress);
+      await ln.fetch();
+      console.info('Successfully fetched lightning address data');
+      
+      // Ensure minimum amount of 1 sat
+      const satsAmount = Math.max(1, Math.ceil(amount / 1000)); // Convert millisats to sats
+      console.info(`Requesting invoice for ${satsAmount} sats`);
+      
+      const invoice = await ln.requestInvoice({
+        satoshi: satsAmount,
+        comment: 'Test payment',
+      });
+      
+      if (!invoice || !invoice.paymentRequest) {
+        throw new Error('Failed to generate invoice');
       }
-      const { pr: invoice } = await invoiceResponse.json();
 
-      // Pay invoice using NWC
-      const paymentResponse = await nwc.sendPayment(invoice);
+      console.info('Paying invoice with NWC...');
+      const paymentResponse = await nwc.sendPayment(invoice.paymentRequest);
+      
+      if (!paymentResponse || !paymentResponse.preimage) {
+        throw new Error('Payment failed - no preimage received');
+      }
       console.info(`Test payment successful, preimage: ${paymentResponse.preimage}`);
       alert(`Successfully sent ${amount / 1000} sats to karnage1@getalby.com`);
     } catch (error) {
       console.error("Test payment failed:", error);
-      alert("Test payment failed. Please check the console for details.");
+      
+      // Provide more specific error messages
+      let errorMessage = "Test payment failed. ";
+      if (error instanceof Error) {
+        if (error.message.includes('timeout')) {
+          errorMessage += "Connection timed out. Please check your NWC connection and try again.";
+        } else if (error.message.includes('Failed to get invoice')) {
+          errorMessage += "Could not generate invoice. Please try again later.";
+        } else if (error.message.includes('insufficient balance')) {
+          errorMessage += "Insufficient balance to complete the payment.";
+        } else {
+          errorMessage += error.message;
+        }
+      } else {
+        errorMessage += "An unexpected error occurred. Please try again.";
+      }
+      
+      alert(errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -134,6 +148,7 @@ function TestNWCButton() {
 
 export default function SettingsPage() {
   const { publicKey, isLoading, nwcString, saveNwcConnection, removeNwcConnection } = useNostr();
+  const { connectionStatus } = useNWC();
   const router = useRouter();
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -155,15 +170,36 @@ export default function SettingsPage() {
     form.setValue("nwcString", nwcString || "");
   }, [nwcString, form]);
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   async function onSubmit(values: z.infer<typeof formSchema>) {
+    if (isSubmitting) return;
+    
     try {
-      if (values.nwcString.trim()) {
-        saveNwcConnection(values.nwcString.trim());
+      setIsSubmitting(true);
+      const trimmedString = values.nwcString.trim();
+      
+      if (trimmedString) {
+        // Basic validation before saving
+        if (!trimmedString.startsWith('nostr+walletconnect://')) {
+          form.setError('nwcString', {
+            type: 'manual',
+            message: 'Invalid NWC connection string format',
+          });
+          return;
+        }
+        saveNwcConnection(trimmedString);
       } else {
         removeNwcConnection();
       }
     } catch (error) {
       console.error("Failed to save NWC connection:", error);
+      form.setError('nwcString', {
+        type: 'manual',
+        message: 'Failed to save connection',
+      });
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -229,20 +265,22 @@ export default function SettingsPage() {
                     <div className="flex gap-2">
                       <Button 
                         type="submit"
-                        disabled={form.formState.isSubmitting}
+                        disabled={isSubmitting || connectionStatus === 'connecting'}
                         variant={nwcString ? "secondary" : "default"}
                         onClick={(e) => {
                           if (nwcString) {
                             e.preventDefault();
-                            form.setValue("nwcString", "");
-                            removeNwcConnection();
+                            if (!isSubmitting) {
+                              form.setValue("nwcString", "");
+                              removeNwcConnection();
+                            }
                           }
                         }}
                       >
-                        {form.formState.isSubmitting 
-                          ? "Saving..." 
-                          : nwcString 
-                            ? "Remove Connection" 
+                        {isSubmitting || connectionStatus === 'connecting'
+                          ? "Processing..."
+                          : nwcString
+                            ? "Remove Connection"
                             : "Save Connection"}
                       </Button>
                       {nwcString && <TestNWCButton />}
