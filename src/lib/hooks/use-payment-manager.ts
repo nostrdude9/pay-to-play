@@ -2,6 +2,7 @@ import { useEffect, useCallback } from "react";
 import { useAudioStore } from "@/lib/store/audio-store";
 import { useNWC } from "@/components/providers/nwc-provider";
 import { Track } from "@/types/nostr";
+import { LightningAddress } from "@getalby/lightning-tools";
 
 const PAYMENT_INTERVAL = 5; // seconds
 
@@ -17,7 +18,9 @@ export function usePaymentManager() {
   } = useAudioStore();
 
   const calculatePaymentAmount = useCallback((track: Track) => {
-    const ratePerSecond = track.price / track.duration;
+    // Calculate rate per second in millisats
+    const ratePerSecond = (track.price * 1000) / track.duration;
+    // Return millisats amount for the payment interval
     return Math.ceil(ratePerSecond * PAYMENT_INTERVAL);
   }, []);
 
@@ -26,40 +29,37 @@ export function usePaymentManager() {
       if (!nwc) return false;
 
       try {
+        console.info('Starting payment process...');
         updatePaymentState({ lastPaymentStatus: "pending" });
         const amount = calculatePaymentAmount(track);
+        console.info(`Calculated payment amount: ${amount} millisats`);
         
-        // Get LNURL data from our relay
-        const response = await fetch(
-          `http://localhost:3001/api/lnurl/${track.lightningAddress}`,
-          { cache: "no-store" }
-        );
-        if (!response.ok) {
-          throw new Error(`Failed to get LNURL data: ${response.statusText}`);
-        }
-        const { callback } = await response.json();
+        // Get invoice using LightningAddress
+        const lightningAddress = new LightningAddress(track.lightningAddress);
+        await lightningAddress.fetch();
+        console.info('Successfully fetched lightning address data');
         
-        // Generate invoice through our relay
-        const invoiceResponse = await fetch(
-          'http://localhost:3001/api/invoice/create',
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              callback,
-              amount: amount * 1000, // Convert to millisats
-            }),
-          }
-        );
-        if (!invoiceResponse.ok) {
-          throw new Error(`Failed to generate invoice: ${invoiceResponse.statusText}`);
-        }
-        const { pr: invoice } = await invoiceResponse.json();
+        // Ensure minimum amount of 1 sat
+        const satsAmount = Math.max(1, Math.ceil(amount / 1000)); // Convert millisats to sats
+        console.info(`Requesting invoice for ${satsAmount} sats`);
+        
+        const invoice = await lightningAddress.requestInvoice({
+          satoshi: satsAmount,
+          comment: `Payment for ${track.title}`,
+        });
+        console.info('Successfully generated invoice');
 
-        // Pay invoice using NWC
-        const paymentResponse = await nwc.sendPayment(invoice);
+        if (!invoice || !invoice.paymentRequest) {
+          throw new Error('Failed to generate invoice');
+        }
+
+        console.info('Paying invoice with NWC...');
+        const paymentResponse = await nwc.sendPayment(invoice.paymentRequest);
+        
+        if (!paymentResponse || !paymentResponse.preimage) {
+          throw new Error('Payment failed - no preimage received');
+        }
+        
         console.info(`Payment successful, preimage: ${paymentResponse.preimage}`);
         
         updatePaymentState({
@@ -68,7 +68,8 @@ export function usePaymentManager() {
         });
         return true;
       } catch (error) {
-        console.error("Payment failed:", error);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        console.error("Payment failed:", errorMessage);
         updatePaymentState({ lastPaymentStatus: "failed" });
         return false;
       }

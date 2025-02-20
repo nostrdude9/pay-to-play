@@ -129,23 +129,9 @@ export function NostrProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Set initial loading state to false since we don't do initial NDK setup anymore
   useEffect(() => {
-    async function init() {
-      try {
-        const ndkInstance = await initNDK();
-        setNDK(ndkInstance);
-      } catch (err) {
-        setError(err instanceof Error ? err : new Error("Failed to initialize Nostr"));
-      } finally {
-        setIsLoading(false);
-      }
-    }
-
-    init();
-
-    return () => {
-      // Cleanup will be handled by NDK internally
-    };
+    setIsLoading(false);
   }, []);
 
   return (

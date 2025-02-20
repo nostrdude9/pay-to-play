@@ -1,29 +1,88 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, ReactNode, useCallback, useRef, useMemo } from "react";
+import { createContext, useContext, useEffect, useReducer, ReactNode, useCallback, useRef } from "react";
 import { debounce } from "lodash";
+
+// Create debounced function outside component to prevent recreation
+const createDebouncedInit = () => 
+  debounce(
+    async (initFn: () => Promise<void>) => {
+      await initFn();
+    },
+    1000,
+    { leading: true, trailing: false }
+  );
 import { webln } from "@getalby/sdk";
 import { useNostr } from "./nostr-provider";
 
-interface NWCContextType {
+type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+interface NWCState {
   nwc: webln.NostrWebLNProvider | null;
   isConnected: boolean;
   error: Error | null;
+  connectionStatus: ConnectionStatus;
+}
+
+interface NWCContextType extends NWCState {
   connect: () => Promise<void>;
   disconnect: () => void;
   reconnect: () => Promise<void>;
-  connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
 }
 
-const NWCContext = createContext<NWCContextType>({
+const initialState: NWCState = {
   nwc: null,
   isConnected: false,
   error: null,
+  connectionStatus: 'disconnected'
+};
+
+const NWCContext = createContext<NWCContextType>({
+  ...initialState,
   connect: async () => {},
   disconnect: () => {},
   reconnect: async () => {},
-  connectionStatus: 'disconnected',
 });
+
+type NWCAction =
+  | { type: 'SET_CONNECTING' }
+  | { type: 'SET_CONNECTED'; nwc: webln.NostrWebLNProvider }
+  | { type: 'SET_DISCONNECTED' }
+  | { type: 'SET_ERROR'; error: Error }
+  | { type: 'RESET' };
+
+function nwcReducer(state: NWCState, action: NWCAction): NWCState {
+  switch (action.type) {
+    case 'SET_CONNECTING':
+      return {
+        ...state,
+        connectionStatus: 'connecting',
+        error: null
+      };
+    case 'SET_CONNECTED':
+      return {
+        nwc: action.nwc,
+        isConnected: true,
+        error: null,
+        connectionStatus: 'connected'
+      };
+    case 'SET_DISCONNECTED':
+      return {
+        ...initialState,
+        connectionStatus: 'disconnected'
+      };
+    case 'SET_ERROR':
+      return {
+        ...initialState,
+        error: action.error,
+        connectionStatus: 'error'
+      };
+    case 'RESET':
+      return initialState;
+    default:
+      return state;
+  }
+}
 
 // Validate NWC connection string format
 function isValidNWCString(str: string): boolean {
@@ -43,181 +102,276 @@ function isValidNWCString(str: string): boolean {
 }
 
 export function NWCProvider({ children }: { children: ReactNode }) {
-  const [nwc, setNwc] = useState<webln.NostrWebLNProvider | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState<NWCContextType['connectionStatus']>('disconnected');
+  const [state, dispatch] = useReducer(nwcReducer, initialState);
   const { nwcString } = useNostr();
   const reconnectAttemptsRef = useRef(0);
-  const MAX_RECONNECT_ATTEMPTS = 3;
-  const CONNECTION_TIMEOUT = 10000; // 10 seconds
-  const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const MAX_RECONNECT_ATTEMPTS = 5;
+  const CONNECTION_TIMEOUT = 30000; // 30 seconds
+  const INITIAL_BACKOFF = 1000; // 1 second
   const wsRef = useRef<WebSocket | null>(null);
+  const connectionStatusRef = useRef<ConnectionStatus>('disconnected');
+  const nwcRef = useRef<webln.NostrWebLNProvider | null>(null);
+  const mountedRef = useRef(true);
+  const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-
-  const cleanup = useCallback(() => {
-    // Clear connection timeout
-    if (connectionTimeoutRef.current) {
-      clearTimeout(connectionTimeoutRef.current);
-      connectionTimeoutRef.current = null;
+  const cleanup = useCallback((fullCleanup: boolean = false) => {
+    // Always clear intervals
+    if (pingIntervalRef.current) {
+      clearInterval(pingIntervalRef.current);
+      pingIntervalRef.current = null;
     }
 
-    // Clean up WebSocket
-    if (wsRef.current) {
-      wsRef.current.onclose = null;
-      wsRef.current.onerror = null;
-      wsRef.current.close();
-      wsRef.current = null;
-    }
+    // Only perform full cleanup when explicitly requested
+    if (fullCleanup) {
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.onerror = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
 
-    // Clean up NWC provider
-    if (nwc) {
-      try {
-        nwc.close?.();
-      } catch (err) {
-        console.error('Error during NWC cleanup:', err);
+      if (nwcRef.current) {
+        try {
+          nwcRef.current.close?.();
+        } catch (err) {
+          console.error('Error during NWC cleanup:', err);
+        }
+        nwcRef.current = null;
+      }
+
+      // Only dispatch if we're not already disconnected
+      if (connectionStatusRef.current !== 'disconnected') {
+        connectionStatusRef.current = 'disconnected';
+        if (mountedRef.current) {
+          dispatch({ type: 'SET_DISCONNECTED' });
+        }
       }
     }
-
-    setNwc(null);
-    setIsConnected(false);
-    setConnectionStatus('disconnected');
-    setError(null);
-  }, [nwc]);
-
-  const debouncedInitNWC = useMemo(() => {
-    const debouncedFn = debounce(
-      async (initFn: () => Promise<void>) => {
-        await initFn();
-      },
-      1000,
-      { leading: true, trailing: false }
-    );
-    return {
-      execute: debouncedFn,
-      cancel: debouncedFn.cancel
-    };
   }, []);
 
+  // Store debounced function in ref to maintain instance across renders
+  const debouncedInitRef = useRef(createDebouncedInit());
+
   const initNWC = useCallback(async () => {
-    if (!nwcString) {
-      cleanup();
-      return;
+    if (connectionStatusRef.current === 'connecting') {
+      return; // Prevent multiple simultaneous connection attempts
     }
 
+    // Clean up existing connection first
+    cleanup(true);
+
+    // Cancel any pending debounced calls
+    debouncedInitRef.current.cancel();
+    
+    if (!nwcString) return;
+
     if (!isValidNWCString(nwcString)) {
-      setError(new Error("Invalid NWC connection string format"));
-      setConnectionStatus('error');
+      if (mountedRef.current) {
+        dispatch({ type: 'SET_ERROR', error: new Error("Invalid NWC connection string format") });
+      }
       return;
     }
 
     try {
-      setConnectionStatus('connecting');
-      setError(null);
+      connectionStatusRef.current = 'connecting';
+      if (mountedRef.current) {
+        dispatch({ type: 'SET_CONNECTING' });
+      }
 
+      console.info('Initializing NWC provider...');
       const nwcProvider = new webln.NostrWebLNProvider({
         nostrWalletConnectUrl: nwcString,
       });
 
-      // Set up connection timeout
-      connectionTimeoutRef.current = setTimeout(() => {
-        console.error('NWC connection timeout');
-        setError(new Error('Connection timeout'));
-        setConnectionStatus('error');
-        cleanup();
-      }, CONNECTION_TIMEOUT);
+      nwcRef.current = nwcProvider;
 
-      // Set up WebSocket handling
+      // Set up WebSocket handling with better connection management
       const ws = (nwcProvider as { _relay?: { ws?: WebSocket } })._relay?.ws;
       if (ws) {
         wsRef.current = ws;
         
-        ws.onerror = (event: Event) => {
-          console.error('WebSocket error:', event);
-          setError(new Error('WebSocket connection error'));
-          setConnectionStatus('error');
-          setIsConnected(false);
-          cleanup();
+        const setupWebSocket = () => {
+          ws.onopen = () => {
+            console.info('WebSocket connection established');
+          };
+          
+          ws.onerror = (event: Event) => {
+            console.error('WebSocket error:', event);
+            // Only handle severe connection errors
+            if (ws.readyState === WebSocket.CLOSED) {
+              if (mountedRef.current) {
+                const error = new Error('WebSocket connection lost - please check your internet connection');
+                dispatch({ type: 'SET_ERROR', error });
+                
+                // Attempt reconnection if completely disconnected
+                if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+                  const backoffTime = INITIAL_BACKOFF * Math.pow(2, reconnectAttemptsRef.current);
+                  console.info(`WebSocket error - attempting reconnection in ${backoffTime}ms`);
+                  setTimeout(() => {
+                    if (mountedRef.current) {
+                      initNWC();
+                    }
+                  }, backoffTime);
+                }
+              }
+            }
+          };
+
+          ws.onclose = (event) => {
+            console.info(`WebSocket closed with code ${event.code}`);
+            // Only cleanup and attempt reconnect if we're not in a temporary state
+            if (mountedRef.current && 
+                connectionStatusRef.current === 'connected' && 
+                event.code !== 1000) { // 1000 is normal closure
+              if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+                const backoffTime = INITIAL_BACKOFF * Math.pow(2, reconnectAttemptsRef.current);
+                console.info(`WebSocket closed - attempting reconnection in ${backoffTime}ms`);
+                setTimeout(() => {
+                  if (mountedRef.current) {
+                    initNWC();
+                  }
+                }, backoffTime);
+              }
+            }
+          };
         };
 
-        ws.onclose = () => {
-          console.log('WebSocket closed');
-          setIsConnected(false);
-          setConnectionStatus('disconnected');
-          cleanup();
-        };
+        setupWebSocket();
+
+        // Set up ping/pong to keep connection alive
+        pingIntervalRef.current = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 30000); // Send ping every 30 seconds
       }
 
       try {
+        console.info('Enabling NWC provider...');
         await Promise.race([
           nwcProvider.enable(),
           new Promise((_, reject) => 
             setTimeout(() => reject(new Error('Enable timeout')), CONNECTION_TIMEOUT)
           )
         ]);
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        throw new Error(`Failed to enable NWC provider: ${errorMessage}`);
+        
+        // Test the connection with a simple request
+        await nwcProvider.getInfo();
+        console.info('NWC provider enabled and verified successfully');
+
+        // Update state in a single batch
+        reconnectAttemptsRef.current = 0;
+        connectionStatusRef.current = 'connected';
+        if (mountedRef.current) {
+          dispatch({ type: 'SET_CONNECTED', nwc: nwcProvider });
+        }
+        console.info('NWC connection established successfully');
+      } catch (err) {
+        console.error("Failed to initialize NWC:", err);
+        const error = err instanceof Error ? err : new Error("Failed to initialize NWC");
+        
+        if (mountedRef.current) {
+          dispatch({ type: 'SET_ERROR', error });
+        }
+
+        // Attempt reconnection with exponential backoff if within limits
+        if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+          reconnectAttemptsRef.current += 1;
+          const backoffTime = INITIAL_BACKOFF * Math.pow(2, reconnectAttemptsRef.current - 1);
+          console.info(`Attempting reconnection ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS} in ${backoffTime}ms`);
+          
+          setTimeout(() => {
+            if (mountedRef.current) {
+              debouncedInitRef.current(initNWC);
+            }
+          }, backoffTime);
+        } else {
+          console.error('Max reconnection attempts reached');
+          if (mountedRef.current) {
+            dispatch({ 
+              type: 'SET_ERROR', 
+              error: new Error(`Failed to establish connection after ${MAX_RECONNECT_ATTEMPTS} attempts. Please check your NWC connection string and try again.`) 
+            });
+          }
+        }
       }
-      setNwc(nwcProvider);
-      setIsConnected(true);
-      setConnectionStatus('connected');
-      reconnectAttemptsRef.current = 0;
     } catch (err) {
       console.error("Failed to initialize NWC:", err);
-      setError(err instanceof Error ? err : new Error("Failed to initialize NWC"));
-      setIsConnected(false);
-      setConnectionStatus('error');
+      const error = err instanceof Error ? err : new Error("Failed to initialize NWC");
+      
+      if (mountedRef.current) {
+        dispatch({ type: 'SET_ERROR', error });
+      }
 
-      // Attempt reconnection if within limits
+      // Attempt reconnection with exponential backoff if within limits
       if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
-        debouncedInitNWC.execute(initNWC);
+        reconnectAttemptsRef.current += 1;
+        const backoffTime = INITIAL_BACKOFF * Math.pow(2, reconnectAttemptsRef.current - 1);
+        console.info(`Attempting reconnection ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS} in ${backoffTime}ms`);
+        
+        setTimeout(() => {
+          if (mountedRef.current) {
+            debouncedInitRef.current(initNWC);
+          }
+        }, backoffTime);
       } else {
         console.error('Max reconnection attempts reached');
-        setError(new Error('Failed to establish connection after multiple attempts'));
+        if (mountedRef.current) {
+          dispatch({ 
+            type: 'SET_ERROR', 
+            error: new Error(`Failed to establish connection after ${MAX_RECONNECT_ATTEMPTS} attempts. Please check your NWC connection string and try again.`) 
+          });
+        }
       }
     }
-  }, [nwcString, cleanup, debouncedInitNWC]);
+  }, [nwcString, cleanup]);
 
   // Initialize NWC when connection string changes
   useEffect(() => {
-    if (nwcString) {
-      debouncedInitNWC.execute(initNWC);
-    } else {
-      cleanup();
-    }
-    return () => {
-      debouncedInitNWC.cancel?.();
-      cleanup();
+    mountedRef.current = true;
+
+    const init = async () => {
+      if (!mountedRef.current) return;
+      
+      if (nwcString) {
+        await debouncedInitRef.current(initNWC);
+      } else if (mountedRef.current && connectionStatusRef.current !== 'disconnected') {
+        cleanup(true);
+      }
     };
-  }, [nwcString, debouncedInitNWC, cleanup, initNWC]);
 
-  const connect = async () => {
-    if (isConnected) return;
+    init();
+
+    return () => {
+      mountedRef.current = false;
+      debouncedInitRef.current.cancel();
+      cleanup(true);
+    };
+  }, [nwcString, initNWC, cleanup]);
+
+  const connect = useCallback(async () => {
+    if (connectionStatusRef.current === 'connected') return;
     reconnectAttemptsRef.current = 0;
     await initNWC();
-  };
+  }, [initNWC]);
 
-  const disconnect = () => {
-    cleanup();
-  };
+  const disconnect = useCallback(() => {
+    cleanup(true);
+  }, [cleanup]);
 
-  const reconnect = async () => {
-    cleanup();
+  const reconnect = useCallback(async () => {
+    cleanup(true);
     reconnectAttemptsRef.current = 0;
     await initNWC();
-  };
+  }, [initNWC, cleanup]);
 
   return (
     <NWCContext.Provider 
       value={{ 
-        nwc, 
-        isConnected, 
-        error, 
+        ...state,
         connect, 
         disconnect, 
-        reconnect,
-        connectionStatus 
+        reconnect
       }}
     >
       {children}
