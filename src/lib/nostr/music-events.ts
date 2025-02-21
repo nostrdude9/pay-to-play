@@ -59,6 +59,15 @@ export function parseEventToTrack(event: MusicEvent): Track {
   };
 }
 
+export async function deleteMusicEvent(ndk: NDK, eventId: string): Promise<NDKEvent> {
+  const event = new NDKEvent(ndk);
+  event.kind = 5 as NDKKind;
+  event.tags = [["e", eventId]];
+  
+  await event.publish();
+  return event;
+}
+
 export function validateMusicEvent(event: NDKEvent): event is MusicEvent {
   if (event.kind !== 4100) return false;
 
