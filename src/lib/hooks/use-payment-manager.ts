@@ -44,18 +44,16 @@ export function usePaymentManager() {
       return 0;
     }
     
-    // Calculate charge per 5-second interval
-    const charge_per_5_sec = (track.price / chargeable_duration) * 5;
+    // Calculate cost per interval based on total intervals needed
+    const totalIntervals = Math.ceil(chargeable_duration / PAYMENT_INTERVAL);
+    const costPerInterval = track.price / totalIntervals;
     
-    // Calculate how many 5-sec intervals have passed since free period
-    const intervals = Math.floor((currentTime - track.freeSeconds) / PAYMENT_INTERVAL);
-    
-    // Calculate payment amount directly in sats
-    const satsAmount = Math.max(1, Math.ceil(charge_per_5_sec));
+    // Return cost for this interval
+    const satsAmount = Math.ceil(costPerInterval);
     console.info('Payment calculation result:', {
       chargeable_duration,
-      charge_per_5_sec,
-      intervals,
+      totalIntervals,
+      costPerInterval,
       satsAmount
     });
     
@@ -196,13 +194,7 @@ export function usePaymentManager() {
 
   const calculateTotalCost = useCallback((track: Track) => {
     if (!track) return 0;
-    const chargeable_duration = track.duration - track.freeSeconds;
-    if (chargeable_duration <= 0) return 0;
-    
-    // Calculate total number of payment intervals
-    const totalIntervals = Math.ceil(chargeable_duration / PAYMENT_INTERVAL);
-    // Each interval costs 1 sat minimum
-    return totalIntervals;
+    return track.price; // Simply return the track's price
   }, []);
 
   const calculateCurrentPayment = useCallback((track: Track, currentTime: number) => {
@@ -212,7 +204,10 @@ export function usePaymentManager() {
     
     // Calculate how many intervals have passed
     const intervals = Math.floor((currentTime - track.freeSeconds) / PAYMENT_INTERVAL);
-    return intervals;
+    // Calculate cost per interval
+    const costPerInterval = track.price / Math.ceil(chargeable_duration / PAYMENT_INTERVAL);
+    // Return total cost for elapsed intervals
+    return Math.ceil(intervals * costPerInterval);
   }, []);
 
   return {

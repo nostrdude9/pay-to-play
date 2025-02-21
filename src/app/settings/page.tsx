@@ -25,8 +25,6 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNWC } from "@/components/providers/nwc-provider";
-import { LightningAddress } from "@getalby/lightning-tools";
-
 const formSchema = z.object({
   nwcString: z.string().min(1, {
     message: "NWC connection string is required.",
@@ -67,82 +65,6 @@ function ConnectionStatus() {
         </Button>
       )}
     </div>
-  );
-}
-
-function TestNWCButton() {
-  const [isLoading, setIsLoading] = useState(false);
-  const { nwc, connectionStatus } = useNWC();
-
-  const handleTestPayment = async () => {
-    if (!nwc || connectionStatus !== 'connected') return;
-    
-    try {
-      setIsLoading(true);
-      
-      // Use LightningAddress to handle LNURL
-      const amount = 21 * 1000; // 21 sats in millisats
-      const lightningAddress = 'karnage1@getalby.com';
-      console.info(`Attempting to send ${amount / 1000} sats to ${lightningAddress}`);
-      
-      const ln = new LightningAddress(lightningAddress);
-      await ln.fetch();
-      console.info('Successfully fetched lightning address data');
-      
-      // Ensure minimum amount of 1 sat
-      const satsAmount = Math.max(1, Math.ceil(amount / 1000)); // Convert millisats to sats
-      console.info(`Requesting invoice for ${satsAmount} sats`);
-      
-      const invoice = await ln.requestInvoice({
-        satoshi: satsAmount,
-        comment: 'Test payment',
-      });
-      
-      if (!invoice || !invoice.paymentRequest) {
-        throw new Error('Failed to generate invoice');
-      }
-
-      console.info('Paying invoice with NWC...');
-      const paymentResponse = await nwc.sendPayment(invoice.paymentRequest);
-      
-      if (!paymentResponse || !paymentResponse.preimage) {
-        throw new Error('Payment failed - no preimage received');
-      }
-      console.info(`Test payment successful, preimage: ${paymentResponse.preimage}`);
-      alert(`Successfully sent ${amount / 1000} sats to karnage1@getalby.com`);
-    } catch (error) {
-      console.error("Test payment failed:", error);
-      
-      // Provide more specific error messages
-      let errorMessage = "Test payment failed. ";
-      if (error instanceof Error) {
-        if (error.message.includes('timeout')) {
-          errorMessage += "Connection timed out. Please check your NWC connection and try again.";
-        } else if (error.message.includes('Failed to get invoice')) {
-          errorMessage += "Could not generate invoice. Please try again later.";
-        } else if (error.message.includes('insufficient balance')) {
-          errorMessage += "Insufficient balance to complete the payment.";
-        } else {
-          errorMessage += error.message;
-        }
-      } else {
-        errorMessage += "An unexpected error occurred. Please try again.";
-      }
-      
-      alert(errorMessage);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <Button
-      variant="outline"
-      onClick={handleTestPayment}
-      disabled={isLoading}
-    >
-      {isLoading ? "Testing..." : "Test NWC"}
-    </Button>
   );
 }
 
@@ -283,7 +205,6 @@ export default function SettingsPage() {
                             ? "Remove Connection"
                             : "Save Connection"}
                       </Button>
-                      {nwcString && <TestNWCButton />}
                     </div>
                     {nwcString && <ConnectionStatus />}
                   </div>

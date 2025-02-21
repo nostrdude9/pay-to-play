@@ -13,6 +13,11 @@ export async function publishMusicEvent(
     lightningAddress,
   }: MusicEventData
 ): Promise<NDKEvent> {
+  // Server-side validation for price
+  if (price > 1000) {
+    throw new Error("Price cannot exceed 1000 sats");
+  }
+
   const event = new NDKEvent(ndk);
   event.kind = 4100 as NDKKind;
   event.tags = [
