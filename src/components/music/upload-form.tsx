@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNostr } from "@/components/providers/nostr-provider";
 import { publishMusicEvent } from "@/lib/nostr/music-events";
 import { MusicEventData } from "@/types/nostr";
@@ -9,9 +9,11 @@ import { Input } from "@/components/ui/input";
 import {
   Form,
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
+  FormMessage,
 } from "@/components/ui/form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
@@ -26,8 +28,8 @@ const formSchema = z.object({
     "Duration must be a valid number and at least 1 second"
   ),
   price: z.string().refine(
-    (val) => !isNaN(Number(val)) && Number(val) >= 0,
-    "Price must be a valid number and cannot be negative"
+    (val) => !isNaN(Number(val)) && Number(val) >= 0 && Number(val) <= 1000,
+    "Price must be between 0 and 1000 sats"
   ),
   freeSeconds: z.string().refine(
     (val) => !isNaN(Number(val)) && Number(val) >= 0,
@@ -39,6 +41,8 @@ const formSchema = z.object({
 export function UploadForm() {
   const { ndk, publicKey } = useNostr();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDurationLoading, setIsDurationLoading] = useState(false);
+  const [durationError, setDurationError] = useState<string | null>(null);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -52,6 +56,40 @@ export function UploadForm() {
       lightningAddress: "",
     },
   });
+
+  const getDuration = async (url: string): Promise<number> => {
+    return new Promise((resolve, reject) => {
+      const audio = new Audio(url);
+      audio.addEventListener('loadedmetadata', () => {
+        resolve(Math.round(audio.duration));
+      });
+      audio.addEventListener('error', () => {
+        reject(new Error("Failed to load audio file. Make sure the URL is accessible and points to a valid audio file."));
+      });
+    });
+  };
+
+  // Watch fileUrl changes and update duration automatically
+  useEffect(() => {
+    const fileUrl = form.watch('fileUrl');
+    if (!fileUrl) return;
+
+    const updateDuration = async () => {
+      try {
+        setIsDurationLoading(true);
+        setDurationError(null);
+        const duration = await getDuration(fileUrl);
+        form.setValue('duration', duration.toString());
+      } catch (error) {
+        setDurationError(error instanceof Error ? error.message : "Failed to get audio duration");
+        form.setValue('duration', '');
+      } finally {
+        setIsDurationLoading(false);
+      }
+    };
+
+    updateDuration();
+  }, [form.watch('fileUrl')]);
 
   const onSubmit = async (values: z.infer<typeof formSchema>) => {
     if (!ndk || !publicKey) return;
@@ -92,6 +130,7 @@ export function UploadForm() {
               <FormControl>
                 <Input {...field} />
               </FormControl>
+              <FormMessage />
             </FormItem>
           )}
         />
@@ -105,6 +144,7 @@ export function UploadForm() {
               <FormControl>
                 <Input {...field} />
               </FormControl>
+              <FormMessage />
             </FormItem>
           )}
         />
@@ -118,6 +158,7 @@ export function UploadForm() {
               <FormControl>
                 <Input type="url" {...field} />
               </FormControl>
+              <FormMessage />
             </FormItem>
           )}
         />
@@ -129,8 +170,16 @@ export function UploadForm() {
             <FormItem>
               <FormLabel>Duration (seconds)</FormLabel>
               <FormControl>
-                <Input {...field} />
+                <Input 
+                  {...field} 
+                  disabled={true}
+                  placeholder={isDurationLoading ? "Loading duration..." : "Duration will be detected automatically"}
+                />
               </FormControl>
+              {durationError && (
+                <div className="text-sm text-destructive">{durationError}</div>
+              )}
+              <FormMessage />
             </FormItem>
           )}
         />
@@ -142,8 +191,12 @@ export function UploadForm() {
             <FormItem>
               <FormLabel>Price (sats)</FormLabel>
               <FormControl>
-                <Input {...field} />
+                <Input {...field} type="number" min="0" max="1000" />
               </FormControl>
+              <FormDescription className="text-xs">
+                Max: 1000 sats
+              </FormDescription>
+              <FormMessage />
             </FormItem>
           )}
         />
@@ -157,6 +210,7 @@ export function UploadForm() {
               <FormControl>
                 <Input {...field} />
               </FormControl>
+              <FormMessage />
             </FormItem>
           )}
         />
@@ -170,6 +224,7 @@ export function UploadForm() {
               <FormControl>
                 <Input {...field} />
               </FormControl>
+              <FormMessage />
             </FormItem>
           )}
         />
@@ -216,7 +271,7 @@ export function UploadForm() {
         <Button 
           type="submit" 
           className="w-full" 
-          disabled={isSubmitting}
+          disabled={isSubmitting || isDurationLoading}
         >
           {isSubmitting ? "Publishing..." : "Publish Track"}
         </Button>

@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Badge } from "@/components/ui/badge";
 
 export function Navbar() {
   const { publicKey, profileData, isLoading: nostrLoading, login } = useNostr();
@@ -28,6 +29,7 @@ export function Navbar() {
             <Link href="/" className="text-xl font-bold">
               Pay to Play
             </Link>
+            <Badge variant="destructive">Warning! Alpha Software! Use responsibly. Don&apos;t get rekt!</Badge>
           </div>
 
           <div>
