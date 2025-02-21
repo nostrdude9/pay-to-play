@@ -25,6 +25,7 @@ const initialPaymentState: PaymentState = {
   currentRate: 0,
   nextPaymentDue: 0,
   lastPaymentStatus: "none",
+  totalPaid: 0,
 };
 
 export const useAudioStore = create<AudioState>((set, get) => ({

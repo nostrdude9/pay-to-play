@@ -50,15 +50,16 @@ export function usePaymentManager() {
     // Calculate how many 5-sec intervals have passed since free period
     const intervals = Math.floor((currentTime - track.freeSeconds) / PAYMENT_INTERVAL);
     
-    const amount = Math.ceil(intervals * charge_per_5_sec * 1000); // Convert to millisats
+    // Calculate payment amount directly in sats
+    const satsAmount = Math.max(1, Math.ceil(charge_per_5_sec));
     console.info('Payment calculation result:', {
       chargeable_duration,
       charge_per_5_sec,
       intervals,
-      amount_millisats: amount
+      satsAmount
     });
     
-    return amount;
+    return satsAmount;
   }, []);
 
   const processPayment = useCallback(
@@ -94,21 +95,19 @@ export function usePaymentManager() {
         await lightningAddress.fetch();
         console.info('Lightning address data fetched successfully');
         
-        // Ensure minimum amount of 1 sat
-        const satsAmount = Math.max(1, Math.ceil(amount / 1000)); // Convert millisats to sats
         console.info('Preparing invoice request:', {
-          satsAmount,
+          amount: amount,
           destination: track.lightningAddress,
           track: track.title
         });
         
         console.info('Generating invoice:', {
           timestamp: new Date().toISOString(),
-          amount: satsAmount,
+          amount: amount,
           destination: track.lightningAddress
         });
         const invoice = await lightningAddress.requestInvoice({
-          satoshi: satsAmount,
+          satoshi: amount,
           comment: `Payment for ${track.title}`,
         });
         console.info('Invoice generated successfully:', {
@@ -122,7 +121,7 @@ export function usePaymentManager() {
 
         console.info('Initiating NWC payment:', {
           track: track.title,
-          amount: satsAmount,
+          amount: amount,
           destination: track.lightningAddress
         });
         const paymentResponse = await nwc.sendPayment(invoice.paymentRequest);
@@ -133,7 +132,7 @@ export function usePaymentManager() {
         
         console.info('Payment successful:', {
           track: track.title,
-          amount: satsAmount,
+          amount: amount,
           destination: track.lightningAddress,
           preimage: paymentResponse.preimage
         });
@@ -141,6 +140,7 @@ export function usePaymentManager() {
         updatePaymentState({
           lastPaymentStatus: "success",
           nextPaymentDue: Date.now() + PAYMENT_INTERVAL * 1000,
+          totalPaid: payment.totalPaid + amount
         });
         return true;
       } catch (error) {
@@ -194,12 +194,33 @@ export function usePaymentManager() {
     setIsPlaying
   ]);
 
+  const calculateTotalCost = useCallback((track: Track) => {
+    if (!track) return 0;
+    const chargeable_duration = track.duration - track.freeSeconds;
+    if (chargeable_duration <= 0) return 0;
+    
+    // Calculate total number of payment intervals
+    const totalIntervals = Math.ceil(chargeable_duration / PAYMENT_INTERVAL);
+    // Each interval costs 1 sat minimum
+    return totalIntervals;
+  }, []);
+
+  const calculateCurrentPayment = useCallback((track: Track, currentTime: number) => {
+    if (!track) return 0;
+    const chargeable_duration = track.duration - track.freeSeconds;
+    if (chargeable_duration <= 0 || currentTime <= track.freeSeconds) return 0;
+    
+    // Calculate how many intervals have passed
+    const intervals = Math.floor((currentTime - track.freeSeconds) / PAYMENT_INTERVAL);
+    return intervals;
+  }, []);
+
   return {
     isInFreePeriod: payment.isInFreePeriod,
     remainingFreeSeconds: payment.remainingFreeSeconds,
     lastPaymentStatus: payment.lastPaymentStatus,
-    currentRate: currentTrack
-      ? calculatePaymentAmount(currentTrack, currentTime) / PAYMENT_INTERVAL
-      : 0,
+    totalCost: currentTrack ? calculateTotalCost(currentTrack) : 0,
+    currentPayment: currentTrack ? calculateCurrentPayment(currentTrack, currentTime) : 0,
+    totalPaid: payment.totalPaid,
   };
 }

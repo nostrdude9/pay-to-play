@@ -287,7 +287,7 @@ export function AudioPlayer() {
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   };
 
-  const { isInFreePeriod, remainingFreeSeconds, lastPaymentStatus, currentRate } =
+  const { isInFreePeriod, remainingFreeSeconds, lastPaymentStatus, totalCost, currentPayment, totalPaid } =
     usePaymentManager();
   const { isConnected: nwcConnected, connect: connectNWC } = useNWC();
 
@@ -311,12 +311,30 @@ export function AudioPlayer() {
           <div className="max-w-7xl mx-auto flex items-center justify-between text-sm">
             <div className="flex items-center gap-2">
               {isInFreePeriod ? (
-                <span className="text-green-500">
-                  Free preview: {remainingFreeSeconds}s remaining
-                </span>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="text-green-500 cursor-help">
+                        Free preview: {remainingFreeSeconds}s remaining (Est. total: ~{totalCost} sats)
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Due to payment rounding, actual total paid ({totalPaid} sats) might be slightly higher than estimated</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               ) : (
                 <>
-                  <span>Rate: {currentRate} sats/sec</span>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="cursor-help">Cost: {currentPayment}/~{totalCost} sats</span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Due to payment rounding, actual total paid ({totalPaid} sats) might be slightly higher than estimated</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                   <span>•</span>
                   <span
                     className={`${

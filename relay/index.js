@@ -39,17 +39,33 @@ wss.on('connection', (ws) => {
           return;
         }
 
-        // Only accept kind 4100 events
-        if (event.kind !== 4100) {
-          console.log('Rejected non-music event:', event);
-          ws.send(JSON.stringify(['OK', event.id, false, 'invalid: only kind 4100 events are accepted']));
+        // Handle music events (kind 4100) and deletion events (kind 5)
+        if (event.kind === 4100) {
+          // Store the music event
+          events.set(event.id, event);
+          console.log('Stored music event:', event);
+          ws.send(JSON.stringify(['OK', event.id, true]));
+        } else if (event.kind === 5) {
+          // Handle deletion event
+          const eventToDeleteId = event.tags.find(t => t[0] === 'e')?.[1];
+          const eventToDelete = events.get(eventToDeleteId);
+          
+          // Only allow deletion if:
+          // 1. The event exists
+          // 2. The deletion request comes from the original publisher
+          if (eventToDelete && event.pubkey === eventToDelete.pubkey) {
+            events.delete(eventToDeleteId);
+            console.log('Deleted event:', eventToDeleteId);
+            ws.send(JSON.stringify(['OK', event.id, true]));
+          } else {
+            console.error('Unauthorized deletion attempt or event not found:', event);
+            ws.send(JSON.stringify(['OK', event.id, false, 'invalid: unauthorized deletion or event not found']));
+          }
+        } else {
+          console.log('Rejected non-music/deletion event:', event);
+          ws.send(JSON.stringify(['OK', event.id, false, 'invalid: only kind 4100 and 5 events are accepted']));
           return;
         }
-
-        // Store the event
-        events.set(event.id, event);
-        console.log('Stored music event:', event);
-        ws.send(JSON.stringify(['OK', event.id, true]));
 
       } catch (e) {
         console.error('Error processing event:', e);
@@ -62,16 +78,18 @@ wss.on('connection', (ws) => {
       console.log('Subscription request:', { subId, filter });
 
       try {
-        // Only handle requests for kind 4100 events
-        if (!filter.kinds || !filter.kinds.includes(4100)) {
-          console.log('Ignoring non-music event request');
+        // Handle requests for music events (4100) and deletion events (5)
+        const validKinds = [4100, 5];
+        if (!filter.kinds || !filter.kinds.some(k => validKinds.includes(k))) {
+          console.log('Ignoring non-music/deletion event request');
           ws.send(JSON.stringify(['EOSE', subId]));
           return;
         }
 
         // Send matching events
         for (const event of events.values()) {
-          if (event.kind === 4100) {
+          // Only send events that haven't been deleted
+          if (validKinds.includes(event.kind)) {
             // Apply additional filters if present
             let matches = true;
 
