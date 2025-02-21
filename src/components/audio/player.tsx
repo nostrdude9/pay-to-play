@@ -3,7 +3,6 @@
 import { useEffect, useRef } from "react";
 import { useAudioStore } from "@/lib/store/audio-store";
 import { usePaymentManager } from "@/lib/hooks/use-payment-manager";
-import { Slider } from "@/components/ui/slider";
 import { Play, Pause, Volume2, VolumeX, Zap } from "lucide-react";
 import { useNWC } from "@/components/providers/nwc-provider";
 import { Button } from "@/components/ui/button";
@@ -11,7 +10,7 @@ import {
   Card,
   CardContent,
 } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
+import { Slider } from "@/components/ui/slider";
 import { Separator } from "@/components/ui/separator";
 import {
   Tooltip,
@@ -28,45 +27,245 @@ export function AudioPlayer() {
     duration,
     volume,
     currentTrack,
+    payment,
     setAudioElement,
     setIsPlaying,
     setCurrentTime,
     setDuration,
     setVolume,
+    updatePaymentState,
   } = useAudioStore();
 
   useEffect(() => {
     if (audioRef.current) {
-      setAudioElement(audioRef.current);
-    }
-  }, [setAudioElement]);
+      const audio = audioRef.current;
+      setAudioElement(audio);
+      
+      // Enhanced error handling
+      audio.onerror = () => {
+        console.error('Audio error:', {
+          error: audio.error,
+          code: audio.error?.code,
+          message: audio.error?.message,
+          currentTrack: currentTrack?.title,
+          networkState: audio.networkState,
+          readyState: audio.readyState
+        });
+      };
 
-  useEffect(() => {
-    if (audioRef.current) {
-      if (isPlaying) {
-        audioRef.current.play();
-      } else {
-        audioRef.current.pause();
-      }
+      // Detailed event logging for debugging
+      audio.onloadstart = () => {
+        console.info('Audio loading started:', {
+          track: currentTrack?.title,
+          url: currentTrack?.url,
+          metadata: currentTrack ? {
+            price: currentTrack.price,
+            duration: currentTrack.duration,
+            freeSeconds: currentTrack.freeSeconds,
+            lightningAddress: currentTrack.lightningAddress
+          } : null,
+          readyState: audio.readyState
+        });
+      };
+
+      audio.onprogress = () => {
+        console.info('Audio download progress:', {
+          track: currentTrack?.title,
+          buffered: audio.buffered.length > 0 ? {
+            start: audio.buffered.start(0),
+            end: audio.buffered.end(0)
+          } : null,
+          readyState: audio.readyState
+        });
+      };
+
+      audio.oncanplay = () => {
+        console.info('Audio ready to play:', {
+          track: currentTrack?.title,
+          duration: audio.duration,
+          readyState: audio.readyState,
+          currentTime: audio.currentTime,
+          paused: audio.paused
+        });
+      };
+
+      audio.onplay = () => {
+        console.info('Audio play event:', {
+          track: currentTrack?.title,
+          currentTime: audio.currentTime,
+          duration: audio.duration
+        });
+      };
+
+      audio.onpause = () => {
+        console.info('Audio pause event:', {
+          track: currentTrack?.title,
+          currentTime: audio.currentTime,
+          duration: audio.duration
+        });
+      };
+
+      audio.onseeking = () => {
+        console.info('Audio seeking:', {
+          track: currentTrack?.title,
+          currentTime: audio.currentTime,
+          duration: audio.duration
+        });
+      };
+
+      audio.onseeked = () => {
+        console.info('Audio seeked:', {
+          track: currentTrack?.title,
+          currentTime: audio.currentTime,
+          duration: audio.duration
+        });
+      };
+
+      // Set initial volume
+      audio.volume = volume;
+
+      return () => {
+        console.info('Cleaning up audio element:', {
+          track: currentTrack?.title
+        });
+        audio.pause();
+        audio.src = '';
+        audio.load();
+        setIsPlaying(false);
+      };
     }
-  }, [isPlaying]);
+  }, [setAudioElement, volume, setIsPlaying]);
+
+  // Effect for handling play/pause state
+  useEffect(() => {
+    if (!audioRef.current || !currentTrack) return;
+
+    if (isPlaying) {
+      audioRef.current.play().catch(error => {
+        console.error('Playback failed:', {
+          error: error.message,
+          track: currentTrack.title,
+          currentTime: audioRef.current?.currentTime
+        });
+        setIsPlaying(false);
+      });
+    } else {
+      audioRef.current.pause();
+    }
+  }, [isPlaying, currentTrack, setIsPlaying]);
+
+  // Effect for initializing payment state when track changes
+  useEffect(() => {
+    if (!currentTrack || !audioRef.current) return;
+
+    const startTime = audioRef.current.currentTime;
+    const isInFreePeriod = startTime <= currentTrack.freeSeconds;
+
+    console.info('Initializing payment state for track:', {
+      track: currentTrack.title,
+      startTime,
+      isInFreePeriod,
+      freeSeconds: currentTrack.freeSeconds
+    });
+
+    updatePaymentState({
+      isInFreePeriod,
+      remainingFreeSeconds: Math.max(0, currentTrack.freeSeconds - startTime),
+      nextPaymentDue: isInFreePeriod ? 0 : Date.now(),
+      lastPaymentStatus: "none"
+    });
+  }, [currentTrack, updatePaymentState]);
 
   const handleTimeUpdate = () => {
-    if (audioRef.current) {
-      setCurrentTime(audioRef.current.currentTime);
+    if (!audioRef.current || !currentTrack) return;
+    
+    const newTime = audioRef.current.currentTime;
+    setCurrentTime(newTime);
+
+    // Only update payment state if necessary
+    if (payment.isInFreePeriod) {
+      if (newTime >= currentTrack.freeSeconds) {
+        // Exit free preview period
+        console.info('Free preview period ended:', {
+          track: currentTrack.title,
+          currentTime: newTime,
+          freeSeconds: currentTrack.freeSeconds
+        });
+        
+        updatePaymentState({
+          isInFreePeriod: false,
+          remainingFreeSeconds: 0,
+          nextPaymentDue: Date.now(),
+          lastPaymentStatus: "none"
+        });
+      } else {
+        // Update remaining free seconds only if changed
+        const remainingFree = Math.max(0, currentTrack.freeSeconds - Math.floor(newTime));
+        if (remainingFree !== payment.remainingFreeSeconds) {
+          updatePaymentState({
+            remainingFreeSeconds: remainingFree
+          });
+        }
+      }
     }
   };
 
   const handleLoadedMetadata = () => {
     if (audioRef.current) {
-      setDuration(audioRef.current.duration);
+      const audioDuration = audioRef.current.duration;
+      console.info('Audio metadata loaded:', {
+        track: currentTrack?.title,
+        duration: audioDuration,
+        metadata: currentTrack ? {
+          price: currentTrack.price,
+          configuredDuration: currentTrack.duration,
+          freeSeconds: currentTrack.freeSeconds,
+          lightningAddress: currentTrack.lightningAddress
+        } : null
+      });
+      setDuration(audioDuration);
     }
   };
 
   const handleSeek = (value: number[]) => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = value[0];
-      setCurrentTime(value[0]);
+    if (audioRef.current && currentTrack) {
+      const newTime = value[0];
+      audioRef.current.currentTime = newTime;
+      setCurrentTime(newTime);
+
+      // Update payment state based on seek position
+      const isInFreePeriod = newTime <= currentTrack.freeSeconds;
+      console.info('Seek operation:', {
+        track: currentTrack.title,
+        from: currentTime,
+        to: newTime,
+        freeSeconds: currentTrack.freeSeconds,
+        willBeInFreePeriod: isInFreePeriod
+      });
+
+      // If seeking between free/paid sections, update payment state
+      if (isInFreePeriod !== payment.isInFreePeriod) {
+        console.info('Seek crosses payment boundary:', {
+          track: currentTrack.title,
+          from: {
+            time: currentTime,
+            isInFreePeriod: payment.isInFreePeriod
+          },
+          to: {
+            time: newTime,
+            isInFreePeriod
+          }
+        });
+
+        updatePaymentState({
+          isInFreePeriod,
+          remainingFreeSeconds: isInFreePeriod ? 
+            Math.max(0, currentTrack.freeSeconds - Math.floor(newTime)) : 
+            0,
+          nextPaymentDue: isInFreePeriod ? 0 : Date.now(),
+          lastPaymentStatus: isInFreePeriod ? "none" : payment.lastPaymentStatus
+        });
+      }
     }
   };
 
@@ -96,8 +295,6 @@ export function AudioPlayer() {
 
   const canPlay = isInFreePeriod || nwcConnected;
 
-  const progressPercentage = (currentTime / duration) * 100;
-
   return (
     <Card className="fixed bottom-0 left-0 right-0 border-t">
       <CardContent className="p-4 space-y-2">
@@ -106,6 +303,8 @@ export function AudioPlayer() {
           src={currentTrack.url}
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
+          crossOrigin="anonymous"
+          preload="auto"
         />
         {currentTrack.price > 0 && (
           <>
@@ -186,13 +385,14 @@ export function AudioPlayer() {
                 {formatTime(currentTime)} / {formatTime(duration)}
               </span>
             </div>
-            <Progress value={progressPercentage} className="h-1" />
             <Slider
+              min={0}
+              max={duration || 100}
               value={[currentTime]}
-              max={duration}
-              step={0.1}
               onValueChange={handleSeek}
-              className="w-full mt-2"
+              className="w-full"
+              aria-label="Track progress"
+              disabled={!duration}
             />
           </div>
 
@@ -200,7 +400,11 @@ export function AudioPlayer() {
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon">
+                  <Button 
+                    variant="ghost" 
+                    size="icon"
+                    onClick={() => handleVolumeChange([volume === 0 ? 1 : 0])}
+                  >
                     {volume === 0 ? (
                       <VolumeX className="w-5 h-5" />
                     ) : (
@@ -214,11 +418,13 @@ export function AudioPlayer() {
               </Tooltip>
             </TooltipProvider>
             <Slider
-              value={[volume]}
+              min={0}
               max={1}
-              step={0.01}
+              step={0.1}
+              value={[volume]}
               onValueChange={handleVolumeChange}
               className="w-20"
+              aria-label="Volume"
             />
           </div>
         </div>

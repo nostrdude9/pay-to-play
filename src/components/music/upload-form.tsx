@@ -21,9 +21,18 @@ const formSchema = z.object({
   title: z.string().min(1, "Title is required"),
   artist: z.string().min(1, "Artist is required"),
   fileUrl: z.string().url("Must be a valid URL"),
-  duration: z.number().min(1, "Duration must be at least 1 second"),
-  price: z.number().min(0, "Price cannot be negative"),
-  freeSeconds: z.number().min(0, "Free preview cannot be negative"),
+  duration: z.string().refine(
+    (val) => !isNaN(Number(val)) && Number(val) >= 1,
+    "Duration must be a valid number and at least 1 second"
+  ),
+  price: z.string().refine(
+    (val) => !isNaN(Number(val)) && Number(val) >= 0,
+    "Price must be a valid number and cannot be negative"
+  ),
+  freeSeconds: z.string().refine(
+    (val) => !isNaN(Number(val)) && Number(val) >= 0,
+    "Free preview must be a valid number and cannot be negative"
+  ),
   lightningAddress: z.string().min(1, "Lightning address is required"),
 });
 
@@ -37,9 +46,9 @@ export function UploadForm() {
       title: "",
       artist: "",
       fileUrl: "",
-      duration: 0,
-      price: 0,
-      freeSeconds: 30,
+      duration: "",
+      price: "",
+      freeSeconds: "30",
       lightningAddress: "",
     },
   });
@@ -49,7 +58,12 @@ export function UploadForm() {
 
     try {
       setIsSubmitting(true);
-      await publishMusicEvent(ndk, values as MusicEventData);
+      await publishMusicEvent(ndk, {
+        ...values,
+        freeSeconds: Number(values.freeSeconds),
+        duration: Number(values.duration),
+        price: Number(values.price),
+      } as MusicEventData);
       form.reset();
     } catch (error) {
       console.error("Failed to publish music event:", error);
@@ -115,12 +129,7 @@ export function UploadForm() {
             <FormItem>
               <FormLabel>Duration (seconds)</FormLabel>
               <FormControl>
-                <Input 
-                  type="number" 
-                  min={1}
-                  onChange={e => field.onChange(Number(e.target.value))}
-                  value={field.value}
-                />
+                <Input {...field} />
               </FormControl>
             </FormItem>
           )}
@@ -133,12 +142,7 @@ export function UploadForm() {
             <FormItem>
               <FormLabel>Price (sats)</FormLabel>
               <FormControl>
-                <Input 
-                  type="number" 
-                  min={0}
-                  onChange={e => field.onChange(Number(e.target.value))}
-                  value={field.value}
-                />
+                <Input {...field} />
               </FormControl>
             </FormItem>
           )}
@@ -151,12 +155,7 @@ export function UploadForm() {
             <FormItem>
               <FormLabel>Free Preview (seconds)</FormLabel>
               <FormControl>
-                <Input 
-                  type="number" 
-                  min={0}
-                  onChange={e => field.onChange(Number(e.target.value))}
-                  value={field.value}
-                />
+                <Input {...field} />
               </FormControl>
             </FormItem>
           )}
@@ -174,6 +173,45 @@ export function UploadForm() {
             </FormItem>
           )}
         />
+
+        {/* Price calculation preview */}
+        {(() => {
+          const price = form.watch('price');
+          const duration = form.watch('duration');
+          const freeSeconds = form.watch('freeSeconds');
+          
+          const calculation = (() => {
+            const totalCharge = Number(price);
+            const totalDuration = Number(duration);
+            const freePeriod = Number(freeSeconds);
+            
+            if (isNaN(totalCharge) || isNaN(totalDuration) || isNaN(freePeriod)) return null;
+            
+            const chargeable_duration = totalDuration - freePeriod;
+            if (chargeable_duration <= 0) return null;
+            
+            const charge_per_5_sec = (totalCharge / chargeable_duration) * 5;
+            
+            return {
+              per5Seconds: charge_per_5_sec.toFixed(2),
+              freePeriod,
+              totalIntervals: Math.ceil(chargeable_duration / 5),
+              totalCharge
+            };
+          })();
+
+          return calculation && (
+            <div className="text-sm text-muted-foreground space-y-1 mb-4">
+              <p>Free preview: First {calculation.freePeriod} seconds</p>
+              <p>After free preview:</p>
+              <ul className="list-disc pl-4">
+                <li>{calculation.per5Seconds} sats charged every 5 seconds</li>
+                <li>Total intervals: {calculation.totalIntervals}</li>
+                <li>Total charge: {calculation.totalCharge} sats</li>
+              </ul>
+            </div>
+          );
+        })()}
 
         <Button 
           type="submit" 
