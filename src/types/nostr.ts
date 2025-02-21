@@ -30,6 +30,7 @@ export interface PaymentState {
   currentRate: number;
   nextPaymentDue: number;
   lastPaymentStatus: "none" | "pending" | "success" | "failed";
+  totalPaid: number;
 }
 
 export interface Track {

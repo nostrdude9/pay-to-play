@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { NDKKind } from "@nostr-dev-kit/ndk";
 import { useNostr } from "@/components/providers/nostr-provider";
 import { useAudioStore } from "@/lib/store/audio-store";
-import { subscribeMusicEvents, parseEventToTrack, validateMusicEvent, deleteMusicEvent } from "@/lib/nostr/music-events";
+import { parseEventToTrack, validateMusicEvent, deleteMusicEvent } from "@/lib/nostr/music-events";
 import { Track } from "@/types/nostr";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -45,11 +46,37 @@ export function MusicFeed({ userOnly }: MusicFeedProps) {
     }
 
     console.info('Starting track subscription');
-    const sub = subscribeMusicEvents(ndk);
+    // Subscribe to both music events and deletion events
+    const sub = ndk.subscribe(
+      {
+        kinds: [4100 as NDKKind, 5 as NDKKind],
+        "#t": ["music"],
+      },
+      { closeOnEose: false }
+    );
+
     const tracks = new Map<string, Track>();
 
     sub.on("event", (event) => {
-      if (validateMusicEvent(event)) {
+      if (event.kind === 5) {
+        // Handle deletion event
+        const deletedEventId = event.tags.find(t => t[0] === 'e')?.[1];
+        if (deletedEventId && tracks.has(deletedEventId)) {
+          const trackToDelete = tracks.get(deletedEventId);
+          // Only remove if deletion was requested by the track owner
+          if (trackToDelete && event.pubkey === trackToDelete.pubkey) {
+            console.info('Track deleted:', deletedEventId);
+            tracks.delete(deletedEventId);
+            setTracks(Array.from(tracks.values()));
+          } else {
+            console.info('Unauthorized deletion attempt:', {
+              deletedEventId,
+              requestedBy: event.pubkey
+            });
+          }
+        }
+      } else if (validateMusicEvent(event)) {
+        // Handle music event
         // If userOnly is true, only show tracks from the current user
         if (!userOnly || event.pubkey === publicKey) {
           const track = parseEventToTrack(event);
@@ -139,7 +166,7 @@ export function MusicFeed({ userOnly }: MusicFeedProps) {
               <p className="text-sm text-muted-foreground">{track.artist}</p>
               <p className="text-xs text-muted-foreground break-all">{track.url}</p>
               <div className="flex gap-2 mt-2">
-                <Badge variant="secondary">{track.price} sats</Badge>
+                <Badge variant="secondary">~{track.price} sats</Badge>
                 <Badge variant="outline">{track.freeSeconds}s free preview</Badge>
               </div>
             </div>
