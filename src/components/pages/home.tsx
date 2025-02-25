@@ -26,14 +26,14 @@ export default function HomePage() {
             </button>
           </Alert>
         )}
-        <div className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-sm">
+   
           <div className="mb-4">
             <h2 className="text-2xl font-semibold">Discover Tracks</h2>
           </div>
           <MusicFeed id="home-all-tracks" />
-        </div>
+        
       </div>
-      <AudioPlayer />
+      <AudioPlayer isDashboard={false} />
     </main>
   );
 }

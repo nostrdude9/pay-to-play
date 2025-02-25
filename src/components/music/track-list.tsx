@@ -91,7 +91,7 @@ export function MusicFeed({ userOnly, id = 'default' }: MusicFeedProps) {
         [
           // Music events
           {
-            kinds: [4100 as NDKKind],
+            kinds: [23 as NDKKind],
             "#t": ["music"],
           },
           // Deletion events - we'll filter these in the handler
@@ -146,8 +146,8 @@ export function MusicFeed({ userOnly, id = 'default' }: MusicFeedProps) {
           return;
         }
         
-        // Handle music events (kind 4100)
-        if (event.kind === 4100 && validateMusicEvent(event)) {
+        // Handle music events (kind 23)
+        if (event.kind === 23 && validateMusicEvent(event)) {
           // Skip if we've already processed this event
           if (sharedKnownEventIds.has(event.id)) {
             return;
@@ -173,7 +173,7 @@ export function MusicFeed({ userOnly, id = 'default' }: MusicFeedProps) {
           
           // Update this instance's tracks
           filterTracksForInstance();
-        } else if (event.kind === 4100) {
+        } else if (event.kind === 23) {
           console.info('Invalid music event received:', {
             id: event.id,
             kind: event.kind,
@@ -268,17 +268,48 @@ export function MusicFeed({ userOnly, id = 'default' }: MusicFeedProps) {
     <div className="space-y-4">
       {tracks.map((track) => (
         <Card key={track.eventId}>
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <h3 className="font-medium">{track.title}</h3>
-              <p className="text-sm text-muted-foreground">{track.artist}</p>
-              <p className="text-xs text-muted-foreground break-all">{track.url}</p>
-              <div className="flex gap-2 mt-2">
-                <Badge variant="secondary">~{track.price} sats</Badge>
-                <Badge variant="outline">{track.freeSeconds}s free preview</Badge>
+          <CardContent className="p-4 flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+            <div className="flex flex-col md:flex-row gap-4 w-full">
+              {track.image && (
+                <div className="flex-shrink-0 mx-auto md:mx-0">
+                  <img 
+                    src={track.image} 
+                    alt={`${track.title} cover`} 
+                    className="w-full max-w-[200px] md:w-20 md:h-20 aspect-square object-cover rounded-md"
+                    onError={(e) => {
+                      // Hide image on error
+                      (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                </div>
+              )}
+              <div className="flex-grow text-center md:text-left">
+                <h3 className="font-medium">{track.title}</h3>
+                <p className="text-sm text-muted-foreground">{track.artist}</p>
+                {track.album && (
+                  <p className="text-sm text-muted-foreground">Album: {track.album}</p>
+                )}
+                <p className="text-xs text-muted-foreground break-all">{track.url}</p>
+                {track.license && (
+                  <p className="text-xs text-muted-foreground">License: {track.license}</p>
+                )}
+                {track.content && (
+                  <p className="text-xs text-muted-foreground mt-2">{track.content}</p>
+                )}
+                <div className="flex flex-wrap gap-2 mt-2 justify-center md:justify-start">
+                  <Badge variant="secondary">~{track.price} sats</Badge>
+                  <Badge variant="outline">{track.freeSeconds}s free preview</Badge>
+                  {track.splits && track.splits.length > 0 && (
+                    <Badge variant="outline" className="cursor-help" title={
+                      `Payment splits: ${track.splits.map(s => `${s.lightningAddress} (${s.percentage}%)`).join(', ')}`
+                    }>
+                      {track.splits.length} payment split{track.splits.length > 1 ? 's' : ''}
+                    </Badge>
+                  )}
+                </div>
               </div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 justify-center md:justify-start mt-3 md:mt-0">
               <Button
                 onClick={() => playTrack(track)}
                 variant={currentTrack?.eventId === track.eventId ? "secondary" : "default"}
