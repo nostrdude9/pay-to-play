@@ -46,7 +46,7 @@ export default function DashboardPage() {
           
           <div className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-sm">
             <h2 className="text-2xl font-semibold mb-4">Your Tracks</h2>
-            <MusicFeed userOnly />
+            <MusicFeed userOnly id="dashboard-user-tracks" />
           </div>
         </div>
       </div>

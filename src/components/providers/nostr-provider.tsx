@@ -56,16 +56,23 @@ export function NostrProvider({ children }: { children: ReactNode }) {
         throw new Error("No Nostr extension found");
       }
 
+      // Create a new signer
       const nip07signer = new NDKNip07Signer();
       await nip07signer.blockUntilReady();
       const user = await nip07signer.user();
       
+      // Initialize NDK with the signer
+      console.info('Initializing NDK with NIP-07 signer');
       const ndkInstance = await initNDK(nip07signer);
       
+      // Update state
       setNDK(ndkInstance);
       setSigner(nip07signer);
       setPublicKey(user.pubkey);
+      
+      console.info('Nostr login successful', { pubkey: user.pubkey });
     } catch (err) {
+      console.error('Nostr login failed:', err);
       setError(err instanceof Error ? err : new Error("Failed to login with Nostr"));
       // Reset state on error
       setNDK(null);
