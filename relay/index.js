@@ -202,8 +202,8 @@ wss.on('connection', (ws) => {
           return;
         }
 
-        // Handle music events (kind 4100) and deletion events (kind 5)
-        if (event.kind === 4100) {
+        // Handle music events (kind 23) and deletion events (kind 5)
+        if (event.kind === 23) {
           // Don't store if it's already been deleted
           if (deletions.has(event.id)) {
             console.log('Rejected previously deleted event:', event.id);
@@ -279,7 +279,7 @@ wss.on('connection', (ws) => {
           }
         } else {
           console.log('Rejected non-music/deletion event:', event);
-          ws.send(JSON.stringify(['OK', event.id, false, 'invalid: only kind 4100 and 5 events are accepted']));
+          ws.send(JSON.stringify(['OK', event.id, false, 'invalid: only kind 23 and 5 events are accepted']));
           return;
         }
 
@@ -294,8 +294,8 @@ wss.on('connection', (ws) => {
       console.log('Subscription request:', { subId, filter });
 
       try {
-        // Handle requests for music events (4100) and deletion events (5)
-        const validKinds = [4100, 5];
+        // Handle requests for music events (23) and deletion events (5)
+        const validKinds = [23, 5];
         if (!filter.kinds || !filter.kinds.some(k => validKinds.includes(k))) {
           console.log('Ignoring non-music/deletion event request');
           ws.send(JSON.stringify(['EOSE', subId]));

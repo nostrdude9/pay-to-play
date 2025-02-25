@@ -34,17 +34,17 @@ export default function DashboardPage() {
   return (
     <main className="min-h-screen p-8">
       <div className="max-w-7xl mx-auto">
-        <h1 className="text-4xl font-bold mb-8">Dashboard</h1>
+        <h1 className="text-3xl font-bold mb-8">Dashboard</h1>
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           <div className="space-y-8">
-            <div className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-sm">
+            <div className="p-6 bg-white dark:bg-gray-800 border border-solid rounded-lg shadow-md">
               <h2 className="text-2xl font-semibold mb-4">Upload Track</h2>
               <UploadForm />
             </div>
           </div>
           
-          <div className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-sm">
+          <div className="bg-white dark:bg-gray-800">
             <h2 className="text-2xl font-semibold mb-4">Your Tracks</h2>
             <MusicFeed userOnly id="dashboard-user-tracks" />
           </div>

@@ -214,7 +214,7 @@ export default function SettingsPage() {
               <div className="mt-6 text-sm text-muted-foreground">
                 <p>To get your NWC connection string:</p>
                 <ol className="list-decimal list-inside mt-2 space-y-1">
-                  <li>Open your Nostr Wallet (e.g., Alby)</li>
+                  <li>Visit <a href="https://nwc.getalby.com/" target="_blank">NWC</a> and log in or create an account.</li>
                   <li>Go to Settings &gt; Nostr Wallet Connect</li>
                   <li>Generate a new connection</li>
                   <li>Copy the connection string and paste it here</li>

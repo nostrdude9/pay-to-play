@@ -4,7 +4,7 @@ import { useNWC } from "@/components/providers/nwc-provider";
 import { Track } from "@/types/nostr";
 import { LightningAddress } from "@getalby/lightning-tools";
 
-const PAYMENT_INTERVAL = 5; // seconds
+const PAYMENT_INTERVAL = 10; // seconds
 
 export function usePaymentManager() {
   const { nwc } = useNWC();
@@ -74,81 +74,266 @@ export function usePaymentManager() {
             lightningAddress: track.lightningAddress,
             price: track.price,
             duration: track.duration,
-            freeSeconds: track.freeSeconds
+            freeSeconds: track.freeSeconds,
+            splits: track.splits
           },
           currentTime,
           paymentState: payment
         });
 
         updatePaymentState({ lastPaymentStatus: "pending" });
-        const amount = calculatePaymentAmount(track, currentTime);
+        const totalAmount = calculatePaymentAmount(track, currentTime);
+        
+        // If no payment amount, skip processing
+        if (totalAmount <= 0) {
+          console.info('Payment amount is zero, skipping payment');
+          updatePaymentState({ lastPaymentStatus: "success" });
+          return true;
+        }
+        
         console.info('Payment amount calculated:', {
-          amount_millisats: amount,
+          total_amount_millisats: totalAmount,
           track: track.title
         });
         
-        // Get invoice using LightningAddress
-        console.info('Fetching lightning address data:', track.lightningAddress);
-        const lightningAddress = new LightningAddress(track.lightningAddress);
-        await lightningAddress.fetch();
-        console.info('Lightning address data fetched successfully');
-        
-        console.info('Preparing invoice request:', {
-          amount: amount,
-          destination: track.lightningAddress,
-          track: track.title
-        });
-        
-        console.info('Generating invoice:', {
-          timestamp: new Date().toISOString(),
-          amount: amount,
-          destination: track.lightningAddress
-        });
-        const invoice = await lightningAddress.requestInvoice({
-          satoshi: amount,
-          comment: `Payment for ${track.title}`,
-        });
-        console.info('Invoice generated successfully:', {
-          hasPaymentRequest: !!invoice?.paymentRequest,
-          track: track.title
-        });
-
-        if (!invoice || !invoice.paymentRequest) {
-          throw new Error('Failed to generate invoice');
+        // Check if we have splits to process
+        if (track.splits && track.splits.length > 0) {
+          console.info('Processing payment with splits:', {
+            track: track.title,
+            splits: track.splits
+          });
+          
+          // Calculate total split percentage
+          const totalSplitPercentage = track.splits.reduce(
+            (sum, split) => sum + split.percentage, 0
+          );
+          
+          // Calculate remaining percentage for the primary address
+          const primaryPercentage = 100 - totalSplitPercentage;
+          
+          // Create an array to hold all payment promises
+          const paymentPromises = [];
+          const paymentDetails = [];
+          
+          // Add primary address payment if it has any percentage
+          if (primaryPercentage > 0) {
+            const primaryAmount = Math.ceil((primaryPercentage / 100) * totalAmount);
+            
+            console.info('Preparing primary address payment:', {
+              address: track.lightningAddress,
+              percentage: primaryPercentage,
+              amount: primaryAmount
+            });
+            
+            // Update totalPaid immediately
+            updatePaymentState({
+              totalPaid: payment.totalPaid + primaryAmount
+            });
+            
+            // Add to payment promises
+            paymentPromises.push(
+              (async () => {
+                try {
+                  // Get invoice using LightningAddress
+                  const lightningAddress = new LightningAddress(track.lightningAddress);
+                  await lightningAddress.fetch();
+                  
+                  const invoice = await lightningAddress.requestInvoice({
+                    satoshi: primaryAmount,
+                    comment: `Payment for ${track.title} (${primaryPercentage}%)`,
+                  });
+                  
+                  if (!invoice || !invoice.paymentRequest) {
+                    throw new Error('Failed to generate invoice for primary address');
+                  }
+                  
+                  // Send payment
+                  const paymentResponse = await nwc.sendPayment(invoice.paymentRequest);
+                  
+                  if (paymentResponse && paymentResponse.preimage) {
+                    console.info('Primary address payment successful:', {
+                      address: track.lightningAddress,
+                      amount: primaryAmount,
+                      preimage: paymentResponse.preimage
+                    });
+                    return true;
+                  } else {
+                    console.error('Primary address payment failed');
+                    return false;
+                  }
+                } catch (error) {
+                  console.error('Primary address payment error:', error);
+                  return false;
+                }
+              })()
+            );
+            
+            paymentDetails.push({
+              address: track.lightningAddress,
+              amount: primaryAmount,
+              type: 'primary'
+            });
+          }
+          
+          // Add split payments
+          for (const split of track.splits) {
+            const splitAmount = Math.ceil((split.percentage / 100) * totalAmount);
+            
+            console.info('Preparing split payment:', {
+              address: split.lightningAddress,
+              percentage: split.percentage,
+              amount: splitAmount
+            });
+            
+            // Update totalPaid immediately
+            updatePaymentState({
+              totalPaid: payment.totalPaid + splitAmount
+            });
+            
+            // Add to payment promises
+            paymentPromises.push(
+              (async () => {
+                try {
+                  // Get invoice using LightningAddress
+                  const lightningAddress = new LightningAddress(split.lightningAddress);
+                  await lightningAddress.fetch();
+                  
+                  const invoice = await lightningAddress.requestInvoice({
+                    satoshi: splitAmount,
+                    comment: `Payment for ${track.title} (${split.percentage}%)`,
+                  });
+                  
+                  if (!invoice || !invoice.paymentRequest) {
+                    throw new Error(`Failed to generate invoice for split address ${split.lightningAddress}`);
+                  }
+                  
+                  // Send payment
+                  const paymentResponse = await nwc.sendPayment(invoice.paymentRequest);
+                  
+                  if (paymentResponse && paymentResponse.preimage) {
+                    console.info('Split payment successful:', {
+                      address: split.lightningAddress,
+                      amount: splitAmount,
+                      preimage: paymentResponse.preimage
+                    });
+                    return true;
+                  } else {
+                    console.error('Split payment failed:', {
+                      address: split.lightningAddress,
+                      amount: splitAmount
+                    });
+                    return false;
+                  }
+                } catch (error) {
+                  console.error('Split payment error:', {
+                    address: split.lightningAddress,
+                    error
+                  });
+                  return false;
+                }
+              })()
+            );
+            
+            paymentDetails.push({
+              address: split.lightningAddress,
+              amount: splitAmount,
+              type: 'split',
+              percentage: split.percentage
+            });
+          }
+          
+          // Process all payments concurrently
+          console.info('Processing all payments concurrently:', {
+            track: track.title,
+            paymentCount: paymentPromises.length,
+            details: paymentDetails
+          });
+          
+          // Wait for all payments to complete
+          const results = await Promise.all(paymentPromises);
+          
+          // Count successful payments
+          const successfulPayments = results.filter(result => result).length;
+          const totalPayments = paymentPromises.length;
+          
+          // Update payment status based on all payments
+          updatePaymentState({
+            lastPaymentStatus: successfulPayments === totalPayments ? "success" : "failed"
+          });
+          
+          return successfulPayments === totalPayments;
+        } else {
+          // No splits - process payment to primary address as before
+          console.info('Processing payment to primary address:', {
+            address: track.lightningAddress,
+            amount: totalAmount
+          });
+          
+          // Get invoice using LightningAddress
+          console.info('Fetching lightning address data:', track.lightningAddress);
+          const lightningAddress = new LightningAddress(track.lightningAddress);
+          await lightningAddress.fetch();
+          console.info('Lightning address data fetched successfully');
+          
+          console.info('Generating invoice:', {
+            timestamp: new Date().toISOString(),
+            amount: totalAmount,
+            destination: track.lightningAddress
+          });
+          const invoice = await lightningAddress.requestInvoice({
+            satoshi: totalAmount,
+            comment: `Payment for ${track.title}`,
+          });
+          console.info('Invoice generated successfully:', {
+            hasPaymentRequest: !!invoice?.paymentRequest,
+            track: track.title
+          });
+          
+          if (!invoice || !invoice.paymentRequest) {
+            throw new Error('Failed to generate invoice');
+          }
+          
+          // Update totalPaid as soon as invoice is issued
+          updatePaymentState({
+            totalPaid: payment.totalPaid + totalAmount
+          });
+          
+          console.info('Initiating NWC payment:', {
+            track: track.title,
+            amount: totalAmount,
+            destination: track.lightningAddress
+          });
+          const paymentResponse = await nwc.sendPayment(invoice.paymentRequest);
+          
+          if (!paymentResponse || !paymentResponse.preimage) {
+            throw new Error('Payment failed - no preimage received');
+          }
+          
+          console.info('Payment successful:', {
+            track: track.title,
+            amount: totalAmount,
+            destination: track.lightningAddress,
+            preimage: paymentResponse.preimage
+          });
+          
+          updatePaymentState({
+            lastPaymentStatus: "success",
+            // We don't update nextPaymentDue here because it's already updated in the useEffect
+            // totalPaid is already updated when invoice was issued
+          });
+          return true;
         }
-
-        console.info('Initiating NWC payment:', {
-          track: track.title,
-          amount: amount,
-          destination: track.lightningAddress
-        });
-        const paymentResponse = await nwc.sendPayment(invoice.paymentRequest);
-        
-        if (!paymentResponse || !paymentResponse.preimage) {
-          throw new Error('Payment failed - no preimage received');
-        }
-        
-        console.info('Payment successful:', {
-          track: track.title,
-          amount: amount,
-          destination: track.lightningAddress,
-          preimage: paymentResponse.preimage
-        });
-        
-        updatePaymentState({
-          lastPaymentStatus: "success",
-          nextPaymentDue: Date.now() + PAYMENT_INTERVAL * 1000,
-          totalPaid: payment.totalPaid + amount
-        });
-        return true;
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         console.error('Payment failed:', {
           error: errorMessage,
-          track: track.title,
-          destination: track.lightningAddress
+          track: track.title
         });
-        updatePaymentState({ lastPaymentStatus: "failed" });
+        updatePaymentState({ 
+          lastPaymentStatus: "failed",
+          // We don't update nextPaymentDue here because it's already updated in the useEffect
+          // totalPaid is already updated when invoice was issued, we don't revert it on failure
+        });
         return false;
       }
     },
@@ -157,7 +342,7 @@ export function usePaymentManager() {
 
   // Effect for handling payments
   useEffect(() => {
-    if (!currentTrack || !isPlaying || !nwc || payment.lastPaymentStatus === "pending") {
+    if (!currentTrack || !isPlaying || !nwc) {
       return;
     }
 
@@ -171,15 +356,24 @@ export function usePaymentManager() {
         currentTime,
         payment: {
           isInFreePeriod: payment.isInFreePeriod,
-          nextPaymentDue: new Date(payment.nextPaymentDue).toISOString()
+          nextPaymentDue: new Date(payment.nextPaymentDue).toISOString(),
+          lastPaymentStatus: payment.lastPaymentStatus
         }
       });
 
-      processPayment(currentTrack).then((success) => {
-        if (!success) {
-          setIsPlaying(false);
-        }
+      // Always schedule the next payment regardless of current status
+      updatePaymentState({
+        nextPaymentDue: Date.now() + PAYMENT_INTERVAL * 1000
       });
+
+      // Only process a new payment if we're not already processing one
+      if (payment.lastPaymentStatus !== "pending") {
+        processPayment(currentTrack).then((success) => {
+          if (!success) {
+            setIsPlaying(false);
+          }
+        });
+      }
     }
   }, [
     currentTrack,
@@ -189,7 +383,9 @@ export function usePaymentManager() {
     payment.nextPaymentDue,
     payment.lastPaymentStatus,
     processPayment,
-    setIsPlaying
+    setIsPlaying,
+    updatePaymentState,
+    currentTime
   ]);
 
   const calculateTotalCost = useCallback((track: Track) => {

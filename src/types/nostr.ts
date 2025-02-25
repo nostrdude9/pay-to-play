@@ -1,5 +1,10 @@
 import { NDKEvent } from "@nostr-dev-kit/ndk";
 
+export interface Split {
+  lightningAddress: string;
+  percentage: number;
+}
+
 export interface MusicEventData {
   title: string;
   artist: string;
@@ -8,10 +13,16 @@ export interface MusicEventData {
   price: number;
   freeSeconds: number;
   lightningAddress: string;
+  // Optional fields
+  album?: string;
+  image?: string;
+  license?: string;
+  content?: string;
+  splits?: Split[];
 }
 
 export interface MusicEvent extends NDKEvent {
-  kind: 4100;
+  kind: 23;
   tags: [
     ["t", "music"],
     ["title", string],
@@ -20,8 +31,15 @@ export interface MusicEvent extends NDKEvent {
     ["duration", string],
     ["price", string],
     ["free_seconds", string],
-    ["lightning_address", string]
+    ["lightning_address", string],
+    ...Array<
+      | ["album", string]
+      | ["image", string]
+      | ["license", string]
+      | ["split", string]
+    >
   ];
+  // content is inherited from NDKEvent and is non-optional
 }
 
 export interface PaymentState {
@@ -43,4 +61,10 @@ export interface Track {
   pubkey: string;
   eventId: string;
   duration: number;
+  // Optional fields
+  album?: string;
+  image?: string;
+  license?: string;
+  content?: string;
+  splits?: Split[];
 }

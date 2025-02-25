@@ -19,7 +19,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-export function AudioPlayer() {
+interface AudioPlayerProps {
+  isDashboard?: boolean;
+}
+
+export function AudioPlayer({ isDashboard = false }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const {
     isPlaying,
@@ -297,7 +301,7 @@ export function AudioPlayer() {
 
   return (
     <Card className="fixed bottom-0 left-0 right-0 border-t">
-      <CardContent className="p-4 space-y-2">
+      <CardContent className="p-4 space-y-4">
         <audio
           ref={audioRef}
           src={currentTrack.url}
@@ -306,144 +310,452 @@ export function AudioPlayer() {
           crossOrigin="anonymous"
           preload="auto"
         />
-        {currentTrack.price > 0 && (
-          <>
-          <div className="max-w-7xl mx-auto flex items-center justify-between text-sm">
-            <div className="flex items-center gap-2">
-              {isInFreePeriod ? (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="text-green-500 cursor-help">
-                        Free preview: {remainingFreeSeconds}s remaining (Est. total: ~{totalCost} sats)
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Due to payment rounding, actual total paid ({totalPaid} sats) might be slightly higher than estimated</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              ) : (
-                <>
+        
+        {/* Mobile layout */}
+        <div className="md:hidden">
+          {isDashboard ? (
+            /* Dashboard mobile layout - Stacked vertically */
+            <>
+              {/* Cover art - Full width on mobile */}
+              {currentTrack.image && (
+                <div className="w-full mb-4">
+                  <img 
+                    src={currentTrack.image} 
+                    alt={`${currentTrack.title} cover`} 
+                    className="w-full max-w-[300px] aspect-square object-cover rounded-md mx-auto"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                </div>
+              )}
+              
+              {/* Track info */}
+              <div className="mb-3 text-center">
+                <h3 className="font-medium text-lg">{currentTrack.title}</h3>
+                <p className="text-sm text-muted-foreground">{currentTrack.artist}</p>
+                {currentTrack.album && (
+                  <p className="text-sm text-muted-foreground">Album: {currentTrack.album}</p>
+                )}
+              </div>
+              
+              {/* Payment info */}
+              {currentTrack.price > 0 && (
+                <div className="mb-3 text-sm">
+                  <div className="flex flex-col items-center gap-2">
+                    {isInFreePeriod ? (
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="text-green-500 cursor-help">
+                              Free preview: {remainingFreeSeconds}s remaining (Est. total: ~{totalCost} sats)
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Due to payment rounding, actual total paid ({totalPaid} sats) might be slightly higher than estimated</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    ) : (
+                      <>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="cursor-help">Cost: {currentPayment}/~{totalCost} sats</span>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Due to payment rounding, actual total paid ({totalPaid} sats) might be slightly higher than estimated</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                        <span
+                          className={`${
+                            lastPaymentStatus === "success"
+                              ? "text-green-500"
+                              : lastPaymentStatus === "failed"
+                              ? "text-destructive"
+                              : lastPaymentStatus === "pending"
+                              ? "text-yellow-500"
+                              : "text-muted-foreground"
+                          }`}
+                        >
+                          {lastPaymentStatus === "success"
+                            ? "Payment successful"
+                            : lastPaymentStatus === "failed"
+                            ? "Payment failed"
+                            : lastPaymentStatus === "pending"
+                            ? "Processing payment..."
+                            : "Ready to play"}
+                        </span>
+                      </>
+                    )}
+                    
+                    {!nwcConnected && !isInFreePeriod && (
+                      <Button
+                        onClick={connectNWC}
+                        variant="secondary"
+                        size="sm"
+                        className="gap-1 mt-2"
+                      >
+                        <Zap className="w-4 h-4" />
+                        Connect NWC
+                      </Button>
+                    )}
+                  </div>
+                  <Separator className="my-3" />
+                </div>
+              )}
+              
+              {/* Playback controls */}
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground w-16 text-right">
+                    {formatTime(currentTime)}
+                  </span>
+                  <Slider
+                    min={0}
+                    max={duration || 100}
+                    value={[currentTime]}
+                    onValueChange={handleSeek}
+                    className="flex-1"
+                    aria-label="Track progress"
+                    disabled={!duration}
+                  />
+                  <span className="text-sm text-muted-foreground w-16">
+                    {formatTime(duration)}
+                  </span>
+                </div>
+                
+                <div className="flex justify-center items-center gap-6">
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <span className="cursor-help">Cost: {currentPayment}/~{totalCost} sats</span>
+                        <Button
+                          onClick={togglePlay}
+                          disabled={!canPlay}
+                          variant="ghost"
+                          size="icon"
+                          className="h-12 w-12"
+                        >
+                          {isPlaying ? (
+                            <Pause className="w-8 h-8" />
+                          ) : (
+                            <Play className="w-8 h-8" />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>{isPlaying ? "Pause" : "Play"}</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  
+                  <div className="flex items-center gap-2">
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button 
+                            variant="ghost" 
+                            size="icon"
+                            onClick={() => handleVolumeChange([volume === 0 ? 1 : 0])}
+                          >
+                            {volume === 0 ? (
+                              <VolumeX className="w-5 h-5" />
+                            ) : (
+                              <Volume2 className="w-5 h-5" />
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Volume</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                    <Slider
+                      min={0}
+                      max={1}
+                      step={0.1}
+                      value={[volume]}
+                      onValueChange={handleVolumeChange}
+                      className="w-24"
+                      aria-label="Volume"
+                    />
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            /* Bottom player mobile layout - Compact horizontal */
+            <div className="flex items-center gap-2">
+              {/* Small cover art */}
+              {currentTrack.image && (
+                <div className="flex-shrink-0">
+                  <img 
+                    src={currentTrack.image} 
+                    alt={`${currentTrack.title} cover`} 
+                    className="w-12 h-12 object-cover rounded-md"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                </div>
+              )}
+              
+              {/* Track info and controls */}
+              <div className="flex-1 min-w-0">
+                {/* Track title and artist */}
+                <div className="mb-1 text-left">
+                  <h3 className="font-medium text-sm truncate">{currentTrack.title}</h3>
+                  <p className="text-xs text-muted-foreground truncate">{currentTrack.artist}</p>
+                </div>
+                
+                {/* Progress bar */}
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-muted-foreground w-8">
+                    {formatTime(currentTime)}
+                  </span>
+                  <Slider
+                    min={0}
+                    max={duration || 100}
+                    value={[currentTime]}
+                    onValueChange={handleSeek}
+                    className="flex-1"
+                    aria-label="Track progress"
+                    disabled={!duration}
+                  />
+                  <span className="text-xs text-muted-foreground w-8">
+                    {formatTime(duration)}
+                  </span>
+                </div>
+              </div>
+              
+              {/* Controls */}
+              <div className="flex items-center gap-2">
+                {/* Play/Pause button */}
+                <Button
+                  onClick={togglePlay}
+                  disabled={!canPlay}
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                >
+                  {isPlaying ? (
+                    <Pause className="w-4 h-4" />
+                  ) : (
+                    <Play className="w-4 h-4" />
+                  )}
+                </Button>
+                
+                {/* Volume control */}
+                <Button 
+                  variant="ghost" 
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => handleVolumeChange([volume === 0 ? 1 : 0])}
+                >
+                  {volume === 0 ? (
+                    <VolumeX className="w-4 h-4" />
+                  ) : (
+                    <Volume2 className="w-4 h-4" />
+                  )}
+                </Button>
+              </div>
+              
+              {/* Payment status indicator - small icon only */}
+              {currentTrack.price > 0 && !isInFreePeriod && (
+                <div className="ml-1">
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className={`w-2 h-2 rounded-full ${
+                          lastPaymentStatus === "success"
+                            ? "bg-green-500"
+                            : lastPaymentStatus === "failed"
+                            ? "bg-destructive"
+                            : lastPaymentStatus === "pending"
+                            ? "bg-yellow-500"
+                            : "bg-muted"
+                        }`} />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>
+                          {isInFreePeriod 
+                            ? `Free preview: ${remainingFreeSeconds}s remaining` 
+                            : `Cost: ${currentPayment}/~${totalCost} sats`}
+                        </p>
+                        <p>
+                          {lastPaymentStatus === "success"
+                            ? "Payment successful"
+                            : lastPaymentStatus === "failed"
+                            ? "Payment failed"
+                            : lastPaymentStatus === "pending"
+                            ? "Processing payment..."
+                            : "Ready to play"}
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        
+        {/* Desktop layout - Horizontal */}
+        <div className="hidden md:block">
+          {currentTrack.price > 0 && (
+            <>
+            <div className="max-w-7xl mx-auto flex items-center justify-between text-sm">
+              <div className="flex items-center gap-2">
+                {isInFreePeriod ? (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="text-green-500 cursor-help">
+                          Free preview: {remainingFreeSeconds}s remaining (Est. total: ~{totalCost} sats)
+                        </span>
                       </TooltipTrigger>
                       <TooltipContent>
                         <p>Due to payment rounding, actual total paid ({totalPaid} sats) might be slightly higher than estimated</p>
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
-                  <span>•</span>
-                  <span
-                    className={`${
-                      lastPaymentStatus === "success"
-                        ? "text-green-500"
+                ) : (
+                  <>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="cursor-help">Cost: {currentPayment}/~{totalCost} sats</span>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Due to payment rounding, actual total paid ({totalPaid} sats) might be slightly higher than estimated</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                    <span>•</span>
+                    <span
+                      className={`${
+                        lastPaymentStatus === "success"
+                          ? "text-green-500"
+                          : lastPaymentStatus === "failed"
+                          ? "text-destructive"
+                          : lastPaymentStatus === "pending"
+                          ? "text-yellow-500"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {lastPaymentStatus === "success"
+                        ? "Payment successful"
                         : lastPaymentStatus === "failed"
-                        ? "text-destructive"
+                        ? "Payment failed"
                         : lastPaymentStatus === "pending"
-                        ? "text-yellow-500"
-                        : "text-muted-foreground"
-                    }`}
-                  >
-                    {lastPaymentStatus === "success"
-                      ? "Payment successful"
-                      : lastPaymentStatus === "failed"
-                      ? "Payment failed"
-                      : lastPaymentStatus === "pending"
-                      ? "Processing payment..."
-                      : "Ready to play"}
-                  </span>
-                </>
+                        ? "Processing payment..."
+                        : "Ready to play"}
+                    </span>
+                  </>
+                )}
+              </div>
+              {!nwcConnected && !isInFreePeriod && (
+                <Button
+                  onClick={connectNWC}
+                  variant="secondary"
+                  size="sm"
+                  className="gap-1"
+                >
+                  <Zap className="w-4 h-4" />
+                  Connect NWC
+                </Button>
               )}
             </div>
-            {!nwcConnected && !isInFreePeriod && (
-              <Button
-                onClick={connectNWC}
-                variant="secondary"
-                size="sm"
-                className="gap-1"
-              >
-                <Zap className="w-4 h-4" />
-                Connect NWC
-              </Button>
+            <Separator className="my-2" />
+            </>
+          )}
+          <div className="max-w-7xl mx-auto flex items-center gap-4">
+            {/* Cover art - Small on desktop */}
+            {currentTrack.image && (
+              <div className="flex-shrink-0">
+                <img 
+                  src={currentTrack.image} 
+                  alt={`${currentTrack.title} cover`} 
+                  className="w-16 h-16 object-cover rounded-md"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = 'none';
+                  }}
+                />
+              </div>
             )}
-          </div>
-          <Separator className="my-2" />
-          </>
-        )}
-        <div className="max-w-7xl mx-auto flex items-center gap-4">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  onClick={togglePlay}
-                  disabled={!canPlay}
-                  variant="ghost"
-                  size="icon"
-                >
-                  {isPlaying ? (
-                    <Pause className="w-6 h-6" />
-                  ) : (
-                    <Play className="w-6 h-6" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{isPlaying ? "Pause" : "Play"}</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-
-          <div className="flex-1">
-            <div className="mb-2 flex justify-between text-sm">
-              <span>{currentTrack.title}</span>
-              <span className="text-muted-foreground">
-                {formatTime(currentTime)} / {formatTime(duration)}
-              </span>
-            </div>
-            <Slider
-              min={0}
-              max={duration || 100}
-              value={[currentTime]}
-              onValueChange={handleSeek}
-              className="w-full"
-              aria-label="Track progress"
-              disabled={!duration}
-            />
-          </div>
-
-          <div className="flex items-center gap-2 w-32">
+            
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button 
-                    variant="ghost" 
+                  <Button
+                    onClick={togglePlay}
+                    disabled={!canPlay}
+                    variant="ghost"
                     size="icon"
-                    onClick={() => handleVolumeChange([volume === 0 ? 1 : 0])}
                   >
-                    {volume === 0 ? (
-                      <VolumeX className="w-5 h-5" />
+                    {isPlaying ? (
+                      <Pause className="w-6 h-6" />
                     ) : (
-                      <Volume2 className="w-5 h-5" />
+                      <Play className="w-6 h-6" />
                     )}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  <p>Volume</p>
+                  <p>{isPlaying ? "Pause" : "Play"}</p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
-            <Slider
-              min={0}
-              max={1}
-              step={0.1}
-              value={[volume]}
-              onValueChange={handleVolumeChange}
-              className="w-20"
-              aria-label="Volume"
-            />
+
+            <div className="flex-1">
+              <div className="mb-2 flex justify-between text-sm">
+                <span>{currentTrack.title}</span>
+                <span className="text-muted-foreground">
+                  {formatTime(currentTime)} / {formatTime(duration)}
+                </span>
+              </div>
+              <Slider
+                min={0}
+                max={duration || 100}
+                value={[currentTime]}
+                onValueChange={handleSeek}
+                className="w-full"
+                aria-label="Track progress"
+                disabled={!duration}
+              />
+            </div>
+
+            <div className="flex items-center gap-2 w-32">
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button 
+                      variant="ghost" 
+                      size="icon"
+                      onClick={() => handleVolumeChange([volume === 0 ? 1 : 0])}
+                    >
+                      {volume === 0 ? (
+                        <VolumeX className="w-5 h-5" />
+                      ) : (
+                        <Volume2 className="w-5 h-5" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Volume</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <Slider
+                min={0}
+                max={1}
+                step={0.1}
+                value={[volume]}
+                onValueChange={handleVolumeChange}
+                className="w-20"
+                aria-label="Volume"
+              />
+            </div>
           </div>
         </div>
       </CardContent>

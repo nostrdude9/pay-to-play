@@ -6,6 +6,8 @@ import { publishMusicEvent } from "@/lib/nostr/music-events";
 import { MusicEventData } from "@/types/nostr";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Plus, Trash2 } from "lucide-react";
 import {
   Form,
   FormControl,
@@ -16,8 +18,16 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
+import { useForm, useFieldArray } from "react-hook-form";
 import * as z from "zod";
+
+const splitSchema = z.object({
+  lightningAddress: z.string().min(1, "Lightning address is required"),
+  percentage: z.string().refine(
+    (val) => !isNaN(Number(val)) && Number(val) > 0 && Number(val) <= 100,
+    "Percentage must be between 1 and 100"
+  ),
+});
 
 const formSchema = z.object({
   title: z.string().min(1, "Title is required"),
@@ -36,6 +46,24 @@ const formSchema = z.object({
     "Free preview must be a valid number and cannot be negative"
   ),
   lightningAddress: z.string().min(1, "Lightning address is required"),
+  // Optional fields
+  album: z.string().optional(),
+  image: z.string().url("Must be a valid URL").optional().or(z.literal('')),
+  license: z.string().optional(),
+  content: z.string().optional(),
+  splits: z.array(splitSchema).optional(),
+}).refine((data) => {
+  // If splits are provided, ensure total percentage doesn't exceed 100
+  if (!data.splits || data.splits.length === 0) return true;
+  
+  const totalPercentage = data.splits.reduce(
+    (sum, split) => sum + Number(split.percentage), 0
+  );
+  
+  return totalPercentage <= 100;
+}, {
+  message: "Total split percentages cannot exceed 100%",
+  path: ["splits"],
 });
 
 export function UploadForm() {
@@ -54,7 +82,17 @@ export function UploadForm() {
       price: "",
       freeSeconds: "30",
       lightningAddress: "",
+      album: "",
+      image: "",
+      license: "",
+      content: "",
+      splits: [],
     },
+  });
+  
+  const { fields, append, remove } = useFieldArray({
+    control: form.control,
+    name: "splits",
   });
 
   const getDuration = async (url: string): Promise<number> => {
@@ -96,12 +134,21 @@ export function UploadForm() {
 
     try {
       setIsSubmitting(true);
+      
+      // Convert splits to the right format
+      const splits = values.splits?.map(split => ({
+        lightningAddress: split.lightningAddress,
+        percentage: Number(split.percentage)
+      }));
+      
       await publishMusicEvent(ndk, {
         ...values,
         freeSeconds: Number(values.freeSeconds),
         duration: Number(values.duration),
         price: Number(values.price),
+        splits: splits?.length ? splits : undefined,
       } as MusicEventData);
+      
       form.reset();
     } catch (error) {
       console.error("Failed to publish music event:", error);
@@ -228,6 +275,139 @@ export function UploadForm() {
             </FormItem>
           )}
         />
+        
+        {/* Optional fields */}
+        <div className="border-t pt-4 mt-6">
+          <h3 className="text-lg font-medium mb-4">Optional Information</h3>
+          
+          <FormField
+            control={form.control}
+            name="album"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Album</FormLabel>
+                <FormControl>
+                  <Input {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          
+          <FormField
+            control={form.control}
+            name="image"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Cover Image URL</FormLabel>
+                <FormControl>
+                  <Input {...field} type="url" />
+                </FormControl>
+                <FormDescription className="text-xs">
+                  URL to album art or cover image
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          
+          <FormField
+            control={form.control}
+            name="license"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>License</FormLabel>
+                <FormControl>
+                  <Input {...field} placeholder="e.g., CC-BY, All Rights Reserved" />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          
+          <FormField
+            control={form.control}
+            name="content"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Description</FormLabel>
+                <FormControl>
+                  <Textarea 
+                    {...field} 
+                    placeholder="Add a description, lyrics, or other information about the track"
+                    className="min-h-[100px]"
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          
+          {/* Payment Splits */}
+          <div className="mt-6">
+            <div className="flex justify-between items-center mb-2">
+              <FormLabel className="text-base">Payment Splits</FormLabel>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => append({ lightningAddress: "", percentage: "" })}
+              >
+                <Plus className="h-4 w-4 mr-1" /> Add Split
+              </Button>
+            </div>
+            
+            <FormDescription className="text-xs mb-4">
+              Add additional recipients to split payments with. The primary lightning address will receive the remaining percentage.
+            </FormDescription>
+            
+            {fields.map((field, index) => (
+              <div key={field.id} className="flex gap-2 items-start mb-2">
+                <FormField
+                  control={form.control}
+                  name={`splits.${index}.lightningAddress`}
+                  render={({ field }) => (
+                    <FormItem className="flex-grow">
+                      <FormControl>
+                        <Input {...field} placeholder="Lightning Address" />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                
+                <FormField
+                  control={form.control}
+                  name={`splits.${index}.percentage`}
+                  render={({ field }) => (
+                    <FormItem className="w-24">
+                      <FormControl>
+                        <Input {...field} placeholder="%" type="number" min="1" max="100" />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => remove(index)}
+                  className="mt-1"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+            
+            {form.formState.errors.splits?.root && (
+              <p className="text-sm text-destructive mt-1">
+                {form.formState.errors.splits.root.message}
+              </p>
+            )}
+          </div>
+        </div>
 
         {/* Price calculation preview */}
         {(() => {

@@ -1,5 +1,5 @@
 import NDK, { NDKEvent, NDKKind } from "@nostr-dev-kit/ndk";
-import { MusicEvent, MusicEventData, Track } from "@/types/nostr";
+import { MusicEvent, MusicEventData, Split, Track } from "@/types/nostr";
 
 export async function publishMusicEvent(
   ndk: NDK,
@@ -11,6 +11,11 @@ export async function publishMusicEvent(
     price,
     freeSeconds,
     lightningAddress,
+    album,
+    image,
+    license,
+    content,
+    splits,
   }: MusicEventData
 ): Promise<NDKEvent> {
   // Server-side validation for price
@@ -19,7 +24,7 @@ export async function publishMusicEvent(
   }
 
   const event = new NDKEvent(ndk);
-  event.kind = 4100 as NDKKind;
+  event.kind = 23 as NDKKind;
   event.tags = [
     ["t", "music"],
     ["title", title],
@@ -30,6 +35,25 @@ export async function publishMusicEvent(
     ["free_seconds", freeSeconds.toString()],
     ["lightning_address", lightningAddress],
   ];
+  
+  // Add optional tags if they exist
+  if (album) event.tags.push(["album", album]);
+  if (image) event.tags.push(["image", image]);
+  if (license) event.tags.push(["license", license]);
+  
+  // Add splits if they exist
+  if (splits && splits.length > 0) {
+    splits.forEach(split => {
+      event.tags.push(["split", `${split.lightningAddress}:${split.percentage}`]);
+    });
+  }
+  
+  // Set content if provided
+  if (content) {
+    event.content = content;
+  } else {
+    event.content = ""; // Ensure content is not undefined
+  }
   
   await event.publish();
   return event;
@@ -43,6 +67,20 @@ export function parseEventToTrack(event: MusicEvent): Track {
     return tag ? tag[1] : "";
   };
 
+  // Parse splits if they exist
+  const splits: Split[] = [];
+  event.tags
+    .filter(t => t[0] === "split")
+    .forEach(t => {
+      const splitParts = t[1].split(":");
+      if (splitParts.length === 2) {
+        splits.push({
+          lightningAddress: splitParts[0],
+          percentage: parseInt(splitParts[1], 10)
+        });
+      }
+    });
+
   return {
     title: getTagValue("title"),
     artist: getTagValue("artist"),
@@ -53,6 +91,12 @@ export function parseEventToTrack(event: MusicEvent): Track {
     lightningAddress: getTagValue("lightning_address"),
     pubkey: event.pubkey,
     eventId: event.id,
+    // Optional fields
+    album: getTagValue("album") || undefined,
+    image: getTagValue("image") || undefined,
+    license: getTagValue("license") || undefined,
+    content: event.content || undefined,
+    splits: splits.length > 0 ? splits : undefined
   };
 }
 
@@ -66,7 +110,7 @@ export async function deleteMusicEvent(ndk: NDK, eventId: string): Promise<NDKEv
 }
 
 export function validateMusicEvent(event: NDKEvent): event is MusicEvent {
-  if (event.kind !== 4100) return false;
+  if (event.kind !== 23) return false;
 
   const requiredTags = [
     "t",
