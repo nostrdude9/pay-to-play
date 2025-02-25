@@ -1,12 +1,10 @@
 import { Suspense } from "react";
-import { AudioPlayer } from "@/components/audio/player";
 import HomePage from "@/components/pages/home";
 
 export default function Home() {
   return (
     <Suspense fallback={<Loading />}>
       <HomePage />
-      <AudioPlayer />
     </Suspense>
   );
 }

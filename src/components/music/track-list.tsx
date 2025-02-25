@@ -1,11 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { NDKKind } from "@nostr-dev-kit/ndk";
+import { useEffect, useState, useRef } from "react";
+import { NDKEvent, NDKKind, NDKSubscription } from "@nostr-dev-kit/ndk";
 import { useNostr } from "@/components/providers/nostr-provider";
 import { useAudioStore } from "@/lib/store/audio-store";
 import { parseEventToTrack, validateMusicEvent, deleteMusicEvent } from "@/lib/nostr/music-events";
 import { Track } from "@/types/nostr";
+
+// Shared subscription and track state across all MusicFeed instances
+let sharedSubscription: NDKSubscription | null = null;
+let sharedTracksMap = new Map<string, Track>();
+let sharedKnownEventIds = new Set<string>();
+let activeInstances = 0;
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Play, Pause, Trash2 } from "lucide-react";
@@ -27,9 +33,11 @@ import {
 
 interface MusicFeedProps {
   userOnly?: boolean;
+  // Optional ID to identify this feed instance
+  id?: string;
 }
 
-export function MusicFeed({ userOnly }: MusicFeedProps) {
+export function MusicFeed({ userOnly, id = 'default' }: MusicFeedProps) {
   const { ndk, publicKey } = useNostr();
   const [tracks, setTracks] = useState<Track[]>([]);
   const { 
@@ -38,47 +46,117 @@ export function MusicFeed({ userOnly }: MusicFeedProps) {
     currentTrack, 
     isPlaying
   } = useAudioStore();
+  
+  // Keep track of this component instance's filter
+  const instanceRef = useRef({
+    id,
+    userOnly,
+    publicKey
+  });
+  
+  // Update ref when props change
+  useEffect(() => {
+    instanceRef.current = { id, userOnly, publicKey };
+  }, [id, userOnly, publicKey]);
+
+  // Function to filter tracks based on this instance's criteria
+  const filterTracksForInstance = () => {
+    const filteredTracks = Array.from(sharedTracksMap.values()).filter(track => {
+      // If userOnly is true, only show tracks from the current user
+      if (instanceRef.current.userOnly) {
+        return track.pubkey === instanceRef.current.publicKey;
+      }
+      return true;
+    });
+    
+    setTracks(filteredTracks);
+  };
 
   useEffect(() => {
     if (!ndk) {
-      console.info('Track subscription skipped - NDK not available');
+      console.info(`Track subscription skipped for instance ${id} - NDK not available`);
       return;
     }
 
-    console.info('Starting track subscription');
-    // Subscribe to both music events and deletion events
-    const sub = ndk.subscribe(
-      {
-        kinds: [4100 as NDKKind, 5 as NDKKind],
-        "#t": ["music"],
-      },
-      { closeOnEose: false }
-    );
-
-    const tracks = new Map<string, Track>();
-
-    sub.on("event", (event) => {
-      if (event.kind === 5) {
-        // Handle deletion event
-        const deletedEventId = event.tags.find(t => t[0] === 'e')?.[1];
-        if (deletedEventId && tracks.has(deletedEventId)) {
-          const trackToDelete = tracks.get(deletedEventId);
-          // Only remove if deletion was requested by the track owner
-          if (trackToDelete && event.pubkey === trackToDelete.pubkey) {
-            console.info('Track deleted:', deletedEventId);
-            tracks.delete(deletedEventId);
-            setTracks(Array.from(tracks.values()));
-          } else {
-            console.info('Unauthorized deletion attempt:', {
-              deletedEventId,
-              requestedBy: event.pubkey
-            });
+    // Increment active instances counter
+    activeInstances++;
+    console.info(`MusicFeed instance ${id} mounted (${activeInstances} active instances)`);
+    
+    // Create shared subscription if it doesn't exist
+    if (!sharedSubscription) {
+      console.info('Creating shared track subscription');
+      
+      // Create a single subscription for both music events and their deletions
+      sharedSubscription = ndk.subscribe(
+        [
+          // Music events
+          {
+            kinds: [4100 as NDKKind],
+            "#t": ["music"],
+          },
+          // Deletion events - we'll filter these in the handler
+          {
+            kinds: [5 as NDKKind],
           }
+        ],
+        { closeOnEose: false }
+      );
+
+      sharedSubscription.on("event", (event: NDKEvent) => {
+        // Handle deletion events (kind 5)
+        if (event.kind === 5) {
+          // Get all e-tags (deleted event IDs)
+          const deletedEventIds = event.tags
+            .filter((t: string[]) => t[0] === 'e')
+            .map((t: string[]) => t[1]);
+          
+          // Only process deletions for events we know about
+          const relevantDeletions = deletedEventIds.filter(id => sharedKnownEventIds.has(id));
+          
+          if (relevantDeletions.length === 0) {
+            // Skip processing if none of the deleted events are in our known set
+            return;
+          }
+          
+          let tracksChanged = false;
+          
+          // Process each relevant deletion
+          for (const deletedId of relevantDeletions) {
+            const trackToDelete = sharedTracksMap.get(deletedId);
+            
+            // Only process if deletion was requested by the track owner
+            if (trackToDelete && event.pubkey === trackToDelete.pubkey) {
+              console.info('Track deletion processed:', deletedId);
+              sharedTracksMap.delete(deletedId);
+              sharedKnownEventIds.delete(deletedId);
+              tracksChanged = true;
+            } else {
+              console.info('Unauthorized deletion attempt:', {
+                deletedEventId: deletedId,
+                requestedBy: event.pubkey
+              });
+            }
+          }
+          
+          // Update all active instances if tracks changed
+          if (tracksChanged) {
+            filterTracksForInstance();
+          }
+          
+          return;
         }
-      } else if (validateMusicEvent(event)) {
-        // Handle music event
-        // If userOnly is true, only show tracks from the current user
-        if (!userOnly || event.pubkey === publicKey) {
+        
+        // Handle music events (kind 4100)
+        if (event.kind === 4100 && validateMusicEvent(event)) {
+          // Skip if we've already processed this event
+          if (sharedKnownEventIds.has(event.id)) {
+            return;
+          }
+          
+          // Add to known events
+          sharedKnownEventIds.add(event.id);
+          
+          // Parse and store the track
           const track = parseEventToTrack(event);
           console.info('Track received:', {
             id: event.id,
@@ -90,31 +168,61 @@ export function MusicFeed({ userOnly }: MusicFeedProps) {
               lightningAddress: track.lightningAddress
             }
           });
-          tracks.set(event.id, track);
-          setTracks(Array.from(tracks.values()));
+          
+          sharedTracksMap.set(event.id, track);
+          
+          // Update this instance's tracks
+          filterTracksForInstance();
+        } else if (event.kind === 4100) {
+          console.info('Invalid music event received:', {
+            id: event.id,
+            kind: event.kind,
+            tags: event.tags
+          });
         }
-      } else {
-        console.info('Invalid music event received:', {
-          id: event.id,
-          kind: event.kind,
-          tags: event.tags
-        });
-      }
-    });
+      });
+    } else {
+      console.info(`Using existing shared subscription for instance ${id}`);
+      // If subscription already exists, just update this instance's tracks
+      filterTracksForInstance();
+    }
 
-    // Cleanup subscription on unmount
+    // Cleanup on unmount
     return () => {
-      console.info('Cleaning up track subscription');
-      sub.removeAllListeners();
+      activeInstances--;
+      console.info(`MusicFeed instance ${id} unmounted (${activeInstances} active instances remaining)`);
+      
+      // Only clean up shared subscription when all instances are unmounted
+      if (activeInstances === 0 && sharedSubscription) {
+        console.info('Cleaning up shared track subscription');
+        sharedSubscription.removeAllListeners();
+        sharedSubscription.stop();
+        sharedSubscription = null;
+        
+        // Reset shared state
+        sharedTracksMap = new Map<string, Track>();
+        sharedKnownEventIds = new Set<string>();
+      }
     };
-  }, [ndk, publicKey, userOnly]);
+  }, [ndk, id]);
+  
+  // Update filtered tracks when userOnly or publicKey changes
+  useEffect(() => {
+    filterTracksForInstance();
+  }, [userOnly, publicKey]);
 
   const handleDelete = async (track: Track) => {
     if (!ndk) return;
     
     try {
       await deleteMusicEvent(ndk, track.eventId);
+      
+      // Update local state immediately for better UX
       setTracks(tracks.filter(t => t.eventId !== track.eventId));
+      
+      // Also update shared state
+      sharedTracksMap.delete(track.eventId);
+      sharedKnownEventIds.delete(track.eventId);
     } catch (error) {
       console.error('Failed to delete track:', error);
     }

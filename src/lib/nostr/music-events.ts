@@ -35,15 +35,7 @@ export async function publishMusicEvent(
   return event;
 }
 
-export function subscribeMusicEvents(ndk: NDK) {
-  return ndk.subscribe(
-    {
-      kinds: [4100 as NDKKind],
-      "#t": ["music"],
-    },
-    { closeOnEose: false }
-  );
-}
+// Removed subscribeMusicEvents function as it's now handled directly in track-list.tsx
 
 export function parseEventToTrack(event: MusicEvent): Track {
   const getTagValue = (name: string) => {

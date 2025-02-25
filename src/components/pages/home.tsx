@@ -30,7 +30,7 @@ export default function HomePage() {
           <div className="mb-4">
             <h2 className="text-2xl font-semibold">Discover Tracks</h2>
           </div>
-          <MusicFeed />
+          <MusicFeed id="home-all-tracks" />
         </div>
       </div>
       <AudioPlayer />
