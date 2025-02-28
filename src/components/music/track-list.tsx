@@ -1,17 +1,12 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { NDKEvent, NDKKind, NDKSubscription } from "@nostr-dev-kit/ndk";
 import { useNostr } from "@/components/providers/nostr-provider";
 import { useAudioStore } from "@/lib/store/audio-store";
 import { parseEventToTrack, validateMusicEvent, deleteMusicEvent } from "@/lib/nostr/music-events";
 import { Track } from "@/types/nostr";
-
-// Shared subscription and track state across all MusicFeed instances
-let sharedSubscription: NDKSubscription | null = null;
-let sharedTracksMap = new Map<string, Track>();
-let sharedKnownEventIds = new Set<string>();
-let activeInstances = 0;
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Play, Pause, Trash2 } from "lucide-react";
@@ -30,6 +25,12 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+
+// Shared subscription and track state across all MusicFeed instances
+let sharedSubscription: NDKSubscription | null = null;
+let sharedTracksMap = new Map<string, Track>();
+let sharedKnownEventIds = new Set<string>();
+let activeInstances = 0;
 
 interface MusicFeedProps {
   userOnly?: boolean;
@@ -60,7 +61,7 @@ export function MusicFeed({ userOnly, id = 'default' }: MusicFeedProps) {
   }, [id, userOnly, publicKey]);
 
   // Function to filter tracks based on this instance's criteria
-  const filterTracksForInstance = () => {
+  const filterTracksForInstance = useCallback(() => {
     const filteredTracks = Array.from(sharedTracksMap.values()).filter(track => {
       // If userOnly is true, only show tracks from the current user
       if (instanceRef.current.userOnly) {
@@ -70,7 +71,7 @@ export function MusicFeed({ userOnly, id = 'default' }: MusicFeedProps) {
     });
     
     setTracks(filteredTracks);
-  };
+  }, []);
 
   useEffect(() => {
     if (!ndk) {
@@ -204,12 +205,12 @@ export function MusicFeed({ userOnly, id = 'default' }: MusicFeedProps) {
         sharedKnownEventIds = new Set<string>();
       }
     };
-  }, [ndk, id]);
+  }, [ndk, id, filterTracksForInstance]);
   
   // Update filtered tracks when userOnly or publicKey changes
   useEffect(() => {
     filterTracksForInstance();
-  }, [userOnly, publicKey]);
+  }, [userOnly, publicKey, filterTracksForInstance]);
 
   const handleDelete = async (track: Track) => {
     if (!ndk) return;
@@ -272,13 +273,15 @@ export function MusicFeed({ userOnly, id = 'default' }: MusicFeedProps) {
             <div className="flex flex-col md:flex-row gap-4 w-full">
               {track.image && (
                 <div className="flex-shrink-0 mx-auto md:mx-0">
-                  <img 
+                  <Image 
                     src={track.image} 
                     alt={`${track.title} cover`} 
+                    width={200}
+                    height={200}
                     className="w-full max-w-[200px] md:w-20 md:h-20 aspect-square object-cover rounded-md"
-                    onError={(e) => {
+                    onError={(e: React.SyntheticEvent<HTMLImageElement>) => {
                       // Hide image on error
-                      (e.target as HTMLImageElement).style.display = 'none';
+                      e.currentTarget.style.display = 'none';
                     }}
                   />
                 </div>

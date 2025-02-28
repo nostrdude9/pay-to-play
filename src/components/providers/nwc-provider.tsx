@@ -329,12 +329,14 @@ export function NWCProvider({ children }: { children: ReactNode }) {
   // Initialize NWC when connection string changes
   useEffect(() => {
     mountedRef.current = true;
+    // Capture the ref value in a variable
+    const debouncedInit = debouncedInitRef.current;
 
     const init = async () => {
       if (!mountedRef.current) return;
       
       if (nwcString) {
-        await debouncedInitRef.current(initNWC);
+        await debouncedInit(initNWC);
       } else if (mountedRef.current && connectionStatusRef.current !== 'disconnected') {
         cleanup(true);
       }
@@ -344,7 +346,7 @@ export function NWCProvider({ children }: { children: ReactNode }) {
 
     return () => {
       mountedRef.current = false;
-      debouncedInitRef.current.cancel();
+      debouncedInit.cancel();
       cleanup(true);
     };
   }, [nwcString, initNWC, cleanup]);

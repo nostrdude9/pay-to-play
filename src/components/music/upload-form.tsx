@@ -97,37 +97,123 @@ export function UploadForm() {
 
   const getDuration = async (url: string): Promise<number> => {
     return new Promise((resolve, reject) => {
-      const audio = new Audio(url);
-      audio.addEventListener('loadedmetadata', () => {
-        resolve(Math.round(audio.duration));
-      });
-      audio.addEventListener('error', () => {
-        reject(new Error("Failed to load audio file. Make sure the URL is accessible and points to a valid audio file."));
-      });
+      const audio = new Audio();
+      
+      // Set a timeout to prevent hanging if audio never loads
+      const timeoutId = setTimeout(() => {
+        cleanup();
+        reject(new Error("Timed out while loading audio file"));
+      }, 15000); // 15 second timeout
+      
+      // Function to clean up event listeners
+      const cleanup = () => {
+        audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+        audio.removeEventListener('canplaythrough', handleCanPlayThrough);
+        audio.removeEventListener('error', handleError);
+        clearTimeout(timeoutId);
+      };
+      
+      // Try to get duration when metadata is loaded
+      const handleLoadedMetadata = () => {
+        if (audio.duration && !isNaN(audio.duration) && audio.duration !== Infinity) {
+          cleanup();
+          resolve(Math.round(audio.duration));
+        }
+      };
+      
+      // Backup event in case loadedmetadata doesn't fire correctly
+      const handleCanPlayThrough = () => {
+        if (audio.duration && !isNaN(audio.duration) && audio.duration !== Infinity) {
+          cleanup();
+          resolve(Math.round(audio.duration));
+        }
+      };
+      
+      // Handle errors
+      const handleError = () => {
+        cleanup();
+        console.error('Audio error during duration calculation:', {
+          error: audio.error,
+          code: audio.error?.code,
+          message: audio.error?.message,
+          url,
+          networkState: audio.networkState,
+          readyState: audio.readyState
+        });
+        reject(new Error(`Failed to load audio file: ${audio.error?.message || 'Unknown error'}`));
+      };
+      
+      // Add event listeners
+      audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.addEventListener('canplaythrough', handleCanPlayThrough);
+      audio.addEventListener('error', handleError);
+      
+      // Set crossOrigin to anonymous to handle CORS
+      audio.crossOrigin = "anonymous";
+      
+      // Explicitly set the src attribute
+      audio.src = url;
+      
+      // Call load() to start loading the audio
+      audio.load();
+      
+      // Some browsers might need to play the audio to get the duration
+      audio.volume = 0; // Mute it
+      const playPromise = audio.play();
+      
+      if (playPromise !== undefined) {
+        playPromise.catch(error => {
+          // Auto-play was prevented, but that's okay for our purpose
+          console.log("Auto-play prevented, but we can still get duration:", error);
+        });
+      }
     });
   };
 
   // Watch fileUrl changes and update duration automatically
+  const fileUrl = form.watch('fileUrl');
+  
   useEffect(() => {
-    const fileUrl = form.watch('fileUrl');
     if (!fileUrl) return;
-
+    
+    let isActive = true; // For cleanup/cancellation
+    
     const updateDuration = async () => {
       try {
         setIsDurationLoading(true);
         setDurationError(null);
+        
         const duration = await getDuration(fileUrl);
-        form.setValue('duration', duration.toString());
+        
+        // Only update if component is still mounted and URL hasn't changed
+        if (isActive) {
+          console.log("Setting duration:", duration);
+          form.setValue('duration', duration.toString(), { 
+            shouldValidate: true,
+            shouldDirty: true,
+            shouldTouch: true
+          });
+        }
       } catch (error) {
-        setDurationError(error instanceof Error ? error.message : "Failed to get audio duration");
-        form.setValue('duration', '');
+        if (isActive) {
+          console.error("Duration calculation error:", error);
+          setDurationError(error instanceof Error ? error.message : "Failed to get audio duration");
+          form.setValue('duration', '');
+        }
       } finally {
-        setIsDurationLoading(false);
+        if (isActive) {
+          setIsDurationLoading(false);
+        }
       }
     };
 
     updateDuration();
-  }, [form.watch('fileUrl')]);
+    
+    // Cleanup function to prevent state updates if component unmounts
+    return () => {
+      isActive = false;
+    };
+  }, [fileUrl, form]);
 
   const onSubmit = async (values: z.infer<typeof formSchema>) => {
     if (!ndk || !publicKey) return;
