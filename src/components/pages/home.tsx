@@ -10,7 +10,7 @@ export default function HomePage() {
   const [showAlert, setShowAlert] = useState(true);
   return (
     <main className="min-h-screen p-8">
-      <div className="max-w-7xl mx-auto space-y-4">
+      <div className="max-w-2xl mx-auto space-y-4">
         {showAlert && (
           <Alert>
             <InfoIcon className="h-4 w-4" />

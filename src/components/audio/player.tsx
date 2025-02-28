@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { useAudioStore } from "@/lib/store/audio-store";
 import { usePaymentManager } from "@/lib/hooks/use-payment-manager";
 import { Play, Pause, Volume2, VolumeX, Zap } from "lucide-react";
+import Image from "next/image";
 import { useNWC } from "@/components/providers/nwc-provider";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,6 +40,16 @@ export function AudioPlayer({ isDashboard = false }: AudioPlayerProps) {
     setVolume,
     updatePaymentState,
   } = useAudioStore();
+  
+  // State to track if audio is ready to play
+  const [isAudioReady, setIsAudioReady] = useState(false);
+  // State to track if we're currently in a play/pause transition
+  const [isTransitioning, setIsTransitioning] = useState(false);
+  // Ref to track the last play/pause operation time to prevent rapid toggles
+  const lastOperationTimeRef = useRef(0);
+  // Ref to track retry attempts for play operations
+  const playRetryCountRef = useRef(0);
+  const MAX_PLAY_RETRIES = 3;
 
   useEffect(() => {
     if (audioRef.current) {
@@ -138,25 +149,106 @@ export function AudioPlayer({ isDashboard = false }: AudioPlayerProps) {
         setIsPlaying(false);
       };
     }
-  }, [setAudioElement, volume, setIsPlaying]);
+  }, [setAudioElement, volume, setIsPlaying, currentTrack]);
 
-  // Effect for handling play/pause state
+  // Effect for handling play/pause state with improved state management
   useEffect(() => {
     if (!audioRef.current || !currentTrack) return;
-
-    if (isPlaying) {
-      audioRef.current.play().catch(error => {
-        console.error('Playback failed:', {
-          error: error.message,
-          track: currentTrack.title,
-          currentTime: audioRef.current?.currentTime
-        });
-        setIsPlaying(false);
-      });
-    } else {
-      audioRef.current.pause();
+    
+    // Prevent rapid toggles by checking time since last operation
+    const now = Date.now();
+    const timeSinceLastOperation = now - lastOperationTimeRef.current;
+    if (timeSinceLastOperation < 300) { // 300ms debounce
+      return;
     }
-  }, [isPlaying, currentTrack, setIsPlaying]);
+    
+    // Update last operation time
+    lastOperationTimeRef.current = now;
+    
+    const audio = audioRef.current;
+    
+    // Function to handle play with retry logic
+    const attemptPlay = async () => {
+      if (!audio || !currentTrack) return;
+      
+      // Only proceed if we're not already transitioning
+      if (isTransitioning) return;
+      
+      try {
+        setIsTransitioning(true);
+        
+        // Check if audio is actually ready
+        if (audio.readyState < 2) { // HAVE_CURRENT_DATA or higher
+          console.info('Audio not ready yet, waiting...', {
+            readyState: audio.readyState,
+            track: currentTrack.title
+          });
+          
+          // Wait for canplay event before attempting to play
+          if (!isAudioReady) {
+            return; // The canplay event handler will attempt play
+          }
+        }
+        
+        // Reset retry counter if this is a fresh play attempt
+        if (playRetryCountRef.current === 0) {
+          console.info('Attempting to play audio', {
+            track: currentTrack.title,
+            readyState: audio.readyState,
+            currentTime: audio.currentTime
+          });
+        }
+        
+        // Attempt to play
+        await audio.play();
+        
+        // Success - reset retry counter
+        playRetryCountRef.current = 0;
+        console.info('Playback started successfully', {
+          track: currentTrack.title,
+          currentTime: audio.currentTime
+        });
+      } catch (error) {
+        console.error('Playback failed:', {
+          error: error instanceof Error ? error.message : String(error),
+          track: currentTrack.title,
+          currentTime: audio.currentTime,
+          retryCount: playRetryCountRef.current
+        });
+        
+        // Implement retry logic
+        if (playRetryCountRef.current < MAX_PLAY_RETRIES) {
+          playRetryCountRef.current++;
+          console.info(`Retrying play operation (${playRetryCountRef.current}/${MAX_PLAY_RETRIES})...`);
+          
+          // Small delay before retry
+          setTimeout(() => {
+            if (isPlaying) { // Only retry if we still want to be playing
+              attemptPlay();
+            }
+          }, 500);
+        } else {
+          // Max retries reached, reset state
+          playRetryCountRef.current = 0;
+          setIsPlaying(false);
+        }
+      } finally {
+        setIsTransitioning(false);
+      }
+    };
+    
+    // Handle play/pause based on isPlaying state
+    if (isPlaying) {
+      attemptPlay();
+    } else {
+      // For pause, we don't need complex retry logic
+      audio.pause();
+      console.info('Playback paused', {
+        track: currentTrack.title,
+        currentTime: audio.currentTime
+      });
+    }
+  }, [isPlaying, currentTrack, setIsPlaying, isAudioReady, isTransitioning]);
 
   // Effect for initializing payment state when track changes
   useEffect(() => {
@@ -178,9 +270,12 @@ export function AudioPlayer({ isDashboard = false }: AudioPlayerProps) {
       nextPaymentDue: isInFreePeriod ? 0 : Date.now(),
       lastPaymentStatus: "none"
     });
+    
+    // Reset audio ready state when track changes
+    setIsAudioReady(false);
   }, [currentTrack, updatePaymentState]);
 
-  const handleTimeUpdate = () => {
+  const handleTimeUpdate = useCallback(() => {
     if (!audioRef.current || !currentTrack) return;
     
     const newTime = audioRef.current.currentTime;
@@ -212,9 +307,9 @@ export function AudioPlayer({ isDashboard = false }: AudioPlayerProps) {
         }
       }
     }
-  };
+  }, [currentTrack, payment.isInFreePeriod, payment.remainingFreeSeconds, setCurrentTime, updatePaymentState]);
 
-  const handleLoadedMetadata = () => {
+  const handleLoadedMetadata = useCallback(() => {
     if (audioRef.current) {
       const audioDuration = audioRef.current.duration;
       console.info('Audio metadata loaded:', {
@@ -225,13 +320,39 @@ export function AudioPlayer({ isDashboard = false }: AudioPlayerProps) {
           configuredDuration: currentTrack.duration,
           freeSeconds: currentTrack.freeSeconds,
           lightningAddress: currentTrack.lightningAddress
-        } : null
+        } : null,
+        readyState: audioRef.current.readyState
       });
       setDuration(audioDuration);
     }
-  };
+  }, [currentTrack, setDuration]);
+  
+  // Handle canplay event to track when audio is ready to play
+  const handleCanPlay = useCallback(() => {
+    if (!audioRef.current) return;
+    
+    console.info('Audio can play:', {
+      track: currentTrack?.title,
+      readyState: audioRef.current.readyState,
+      currentTime: audioRef.current.currentTime
+    });
+    
+    setIsAudioReady(true);
+    
+    // If we're supposed to be playing but aren't, try to play now
+    if (isPlaying && audioRef.current.paused && !isTransitioning) {
+      console.info('Auto-starting playback after canplay event');
+      audioRef.current.play().catch(error => {
+        console.error('Auto-play failed after canplay:', {
+          error: error instanceof Error ? error.message : String(error),
+          track: currentTrack?.title
+        });
+        setIsPlaying(false);
+      });
+    }
+  }, [currentTrack, isPlaying, isTransitioning, setIsPlaying]);
 
-  const handleSeek = (value: number[]) => {
+  const handleSeek = useCallback((value: number[]) => {
     if (audioRef.current && currentTrack) {
       const newTime = value[0];
       audioRef.current.currentTime = newTime;
@@ -271,19 +392,32 @@ export function AudioPlayer({ isDashboard = false }: AudioPlayerProps) {
         });
       }
     }
-  };
+  }, [currentTime, currentTrack, payment.isInFreePeriod, payment.lastPaymentStatus, setCurrentTime, updatePaymentState]);
 
-  const handleVolumeChange = (value: number[]) => {
+  const handleVolumeChange = useCallback((value: number[]) => {
     const newVolume = value[0];
     if (audioRef.current) {
       audioRef.current.volume = newVolume;
     }
     setVolume(newVolume);
-  };
+  }, [setVolume]);
 
-  const togglePlay = () => {
+  const togglePlay = useCallback(() => {
+    // Prevent rapid toggles
+    const now = Date.now();
+    if (now - lastOperationTimeRef.current < 300) { // 300ms debounce
+      console.info('Ignoring rapid play/pause toggle');
+      return;
+    }
+    
+    // Update last operation time
+    lastOperationTimeRef.current = now;
+    
+    // Reset play retry counter on toggle
+    playRetryCountRef.current = 0;
+    
     setIsPlaying(!isPlaying);
-  };
+  }, [isPlaying, setIsPlaying]);
 
   const formatTime = (time: number) => {
     const minutes = Math.floor(time / 60);
@@ -307,6 +441,7 @@ export function AudioPlayer({ isDashboard = false }: AudioPlayerProps) {
           src={currentTrack.url}
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
+          onCanPlay={handleCanPlay}
           crossOrigin="anonymous"
           preload="auto"
         />
@@ -319,12 +454,14 @@ export function AudioPlayer({ isDashboard = false }: AudioPlayerProps) {
               {/* Cover art - Full width on mobile */}
               {currentTrack.image && (
                 <div className="w-full mb-4">
-                  <img 
+                  <Image 
                     src={currentTrack.image} 
                     alt={`${currentTrack.title} cover`} 
+                    width={300}
+                    height={300}
                     className="w-full max-w-[300px] aspect-square object-cover rounded-md mx-auto"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = 'none';
+                    onError={(e: React.SyntheticEvent<HTMLImageElement>) => {
+                      e.currentTarget.style.display = 'none';
                     }}
                   />
                 </div>
@@ -490,12 +627,14 @@ export function AudioPlayer({ isDashboard = false }: AudioPlayerProps) {
               {/* Small cover art */}
               {currentTrack.image && (
                 <div className="flex-shrink-0">
-                  <img 
+                  <Image 
                     src={currentTrack.image} 
                     alt={`${currentTrack.title} cover`} 
+                    width={48}
+                    height={48}
                     className="w-12 h-12 object-cover rounded-md"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = 'none';
+                    onError={(e: React.SyntheticEvent<HTMLImageElement>) => {
+                      e.currentTarget.style.display = 'none';
                     }}
                   />
                 </div>
@@ -674,12 +813,14 @@ export function AudioPlayer({ isDashboard = false }: AudioPlayerProps) {
             {/* Cover art - Small on desktop */}
             {currentTrack.image && (
               <div className="flex-shrink-0">
-                <img 
+                <Image 
                   src={currentTrack.image} 
                   alt={`${currentTrack.title} cover`} 
+                  width={64}
+                  height={64}
                   className="w-16 h-16 object-cover rounded-md"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none';
+                  onError={(e: React.SyntheticEvent<HTMLImageElement>) => {
+                    e.currentTarget.style.display = 'none';
                   }}
                 />
               </div>
